@@ -3,7 +3,7 @@ namespace AppManager.Core {
      * Implements the "sandbox-run" CLI verb that generated .desktop Exec lines and
      * ~/.local/bin wrappers use to launch a sandboxed app:
      *
-     *   app-manager sandbox-run --id=<record-id> --target=<path> [-- <app args>]
+     *   app-manager sandbox-run --id=<record-id> --target=<path> [--env=NAME=VALUE] [-- <app args>]
      *
      * Routing every launch through one verb keeps the Exec lines short and means a
      * permission change rewrites a single manifest instead of the primary Exec, every
@@ -40,6 +40,7 @@ namespace AppManager.Core {
             string? record_id = null;
             string? target = null;
             var app_args = new Gee.ArrayList<string>();
+            var env_vars = new Gee.ArrayList<string>();
             bool after_separator = false;
 
             // args[0] is the binary, args[1] is the verb itself.
@@ -55,6 +56,13 @@ namespace AppManager.Core {
                     record_id = arg.substring("--id=".length);
                 } else if (arg.has_prefix("--target=")) {
                     target = arg.substring("--target=".length);
+                } else if (arg.has_prefix("--env=")) {
+                    var variable = arg.substring("--env=".length);
+                    if (variable.index_of_char('=') <= 0) {
+                        printerr("%s: --env requires NAME=VALUE\n", SANDBOX_RUN_VERB);
+                        return 2;
+                    }
+                    env_vars.add(variable);
                 } else {
                     // Tolerate a caller that forgot the separator.
                     app_args.add(arg);
@@ -85,6 +93,10 @@ namespace AppManager.Core {
                         SANDBOX_RUN_VERB, target);
                     return 3;
                 }
+                foreach (var variable in env_vars) {
+                    var eq = variable.index_of_char('=');
+                    Environment.set_variable(variable.substring(0, eq), variable.substring(eq + 1), true);
+                }
                 return exec_plain(target, app_args);
             }
 
@@ -96,6 +108,12 @@ namespace AppManager.Core {
                 return 3;
             }
 
+            // Desktop actions and sub-entries can carry their own bundled env prefix.
+            // Pass those values across bubblewrap's --clearenv, after the registry defaults.
+            var merged_env = new Gee.ArrayList<string>();
+            merged_env.add_all_array(manifest.env);
+            merged_env.add_all(env_vars);
+            manifest.env = merged_env.to_array();
             return launch(manifest, id, target, app_args);
         }
 

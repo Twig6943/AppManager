@@ -56,6 +56,7 @@ namespace AppManager.Core {
         // " N" suffix for secondary copies); it is the restore target for custom_name.
         public string? original_name { get; set; }
         public string? original_commandline_args { get; set; }
+        public string[]? original_env_vars { get; set; }
         public string? original_keywords { get; set; }
         public string? original_icon_name { get; set; }
         public string? original_startup_wm_class { get; set; }
@@ -64,10 +65,13 @@ namespace AppManager.Core {
         // Per-action original Exec args from the bundled .desktop, captured at install/update.
         // Each entry is "action_name=args" (mirroring custom_env_vars storage shape).
         public string[]? original_action_args { get; set; }
+        // "entry_name=NAME=VALUE", captured separately from application arguments.
+        public string[]? original_action_env_vars { get; set; }
         // Per-sub-entry pristine Exec args from the bundled .desktop, captured at install/update.
         // Each entry is "<installed_desktop_basename>=<args>"; used to re-apply custom env vars and
         // command-line args to sub-entries on live edits without compounding previously-added args.
         public string[]? original_sub_args { get; set; }
+        public string[]? original_sub_env_vars { get; set; }
         public string? entry_exec { get; set; }
         public bool is_terminal { get; set; default = false; }
 
@@ -86,7 +90,7 @@ namespace AppManager.Core {
         public string? custom_no_display { get; set; }
         public string? custom_add_to_path { get; set; }
         
-        // Environment variables as array of "NAME=VALUE" strings (max 5)
+        // NAME=VALUE overrides. Null uses bundled defaults; an empty array clears them.
         public string[]? custom_env_vars { get; set; }
         
         // Whether to include pre-release versions when checking for updates (GitHub only)
@@ -248,6 +252,27 @@ namespace AppManager.Core {
             return get_effective(custom_commandline_args, original_commandline_args);
         }
 
+        public string[] get_effective_env_vars(string[]? entry_env_vars = null) {
+            var merged = new Gee.ArrayList<string>();
+            var defaults = custom_env_vars == null ? original_env_vars : null;
+            merge_env_vars(merged, defaults);
+            merge_env_vars(merged, entry_env_vars);
+            merge_env_vars(merged, custom_env_vars);
+            return merged.to_array();
+        }
+
+        private static void merge_env_vars(Gee.ArrayList<string> merged, string[]? source) {
+            foreach (var entry in source ?? new string[0]) {
+                var eq = entry.index_of_char('=');
+                if (eq <= 0) continue;
+                var name = entry.substring(0, eq);
+                for (int i = merged.size - 1; i >= 0; i--) {
+                    if (merged[i].has_prefix(name + "=")) merged.remove_at(i);
+                }
+                merged.add(entry);
+            }
+        }
+
         public string? get_effective_keywords() {
             return get_effective(custom_keywords, original_keywords);
         }
@@ -283,7 +308,7 @@ namespace AppManager.Core {
                    custom_web_page != null ||
                    custom_no_display != null ||
                    custom_add_to_path != null ||
-                   (custom_env_vars != null && custom_env_vars.length > 0) ||
+                   custom_env_vars != null ||
                    (sandbox_extra_dirs != null && sandbox_extra_dirs.length > 0);
         }
 
@@ -354,6 +379,9 @@ namespace AppManager.Core {
             builder.add_string_value(original_name ?? "");
             builder.set_member_name("original_commandline_args");
             builder.add_string_value(original_commandline_args ?? "");
+            put_array(builder, "original_env_vars", original_env_vars);
+            put_array(builder, "original_action_env_vars", original_action_env_vars);
+            put_array(builder, "original_sub_env_vars", original_sub_env_vars);
             builder.set_member_name("original_keywords");
             builder.add_string_value(original_keywords ?? "");
             builder.set_member_name("original_icon_name");
@@ -468,7 +496,7 @@ namespace AppManager.Core {
                 builder.set_member_name("custom_add_to_path");
                 builder.add_string_value(custom_add_to_path);
             }
-            if (custom_env_vars != null && custom_env_vars.length > 0) {
+            if (custom_env_vars != null) {
                 builder.set_member_name("custom_env_vars");
                 builder.begin_array();
                 foreach (var env_var in custom_env_vars) {
@@ -699,6 +727,9 @@ namespace AppManager.Core {
             record.original_name = original_name == "" ? name : original_name;
             var original_commandline_args = obj.get_string_member_with_default("original_commandline_args", "");
             record.original_commandline_args = original_commandline_args == "" ? null : original_commandline_args;
+            record.original_env_vars = read_array(obj, "original_env_vars");
+            record.original_action_env_vars = read_array(obj, "original_action_env_vars");
+            record.original_sub_env_vars = read_array(obj, "original_sub_env_vars");
             var original_keywords = obj.get_string_member_with_default("original_keywords", "");
             record.original_keywords = original_keywords == "" ? null : original_keywords;
             var original_icon_name = obj.get_string_member_with_default("original_icon_name", "");

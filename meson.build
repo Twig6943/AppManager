@@ -197,7 +197,26 @@ wayland_sc_lib = static_library('wayland-security-context',
   include_directories: crypto_shim_inc
 )
 
+# The development test suite lives locally and may be absent from a checkout.
+local_tests_available = false
 if get_option('build_tests')
+  fs = import('fs')
+  local_tests_available = true
+  foreach test_file : [
+    'tests/crypto_shim_test.c',
+    'tests/core_regression_test.vala',
+    'tests/sandbox_workflow_driver.vala',
+    'tests/network_info_proxy_test.py',
+    'tests/sandbox_lifecycle_test.py',
+  ]
+    if not fs.is_file(test_file)
+      local_tests_available = false
+      message('Skipping local tests: missing ' + test_file)
+    endif
+  endforeach
+endif
+
+if local_tests_available
   crypto_shim_test = executable('crypto-shim-test',
     'tests/crypto_shim_test.c',
     link_with: crypto_shim_lib,
@@ -288,7 +307,7 @@ subdir('data')
 subdir('po')
 subdir('src')
 
-if get_option('build_tests')
+if local_tests_available
   test('sandbox-lifecycle', python,
     args: [files('tests/sandbox_lifecycle_test.py'), app_executable, workflow_driver], timeout: 90,
     env: ['APP_MANAGER_TEST_SECCOMP=' + (seccomp_dep.found() ? '1' : '0')])

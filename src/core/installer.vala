@@ -413,7 +413,8 @@ namespace AppManager.Core {
 
             var temp_dir = Utils.FileUtils.create_temp_dir("appmgr-validate-");
             try {
-                AppImageAssets.extract_desktop_entry(metadata.path, temp_dir);
+                var desktop_path = AppImageAssets.extract_desktop_entry(metadata.path, temp_dir);
+                DesktopEntry.parse_exec(new DesktopEntry(desktop_path).exec ?? "");
                 AppImageAssets.extract_icon(metadata.path, temp_dir);
             } finally {
                 Utils.FileUtils.remove_dir_recursive(temp_dir);
@@ -477,6 +478,7 @@ namespace AppManager.Core {
                 record.custom_web_page = old_record.custom_web_page;
                 record.custom_no_display = old_record.custom_no_display;
                 record.custom_add_to_path = old_record.custom_add_to_path;
+                record.custom_env_vars = old_record.custom_env_vars;
                 record.prerelease_enabled = old_record.prerelease_enabled;
                 record.copy_sandbox_from(old_record);
                 // First catalog recognition must not replace existing non-store
@@ -843,7 +845,9 @@ namespace AppManager.Core {
                 }
                 
                 var exec_value = desktop_entry.exec;
-                var original_exec_args = exec_value != null ? DesktopEntry.extract_exec_arguments(exec_value) : null;
+                var parsed_exec = DesktopEntry.parse_exec(exec_value ?? "");
+                var original_exec_args = parsed_exec.arguments;
+                record.original_env_vars = parsed_exec.env_vars;
                 resolved_entry_exec = exec_value != null ? DesktopEntry.resolve_exec_from_desktop(exec_value, effective_app_run) : null;
                 
                 // Derive icon name without path and extension
@@ -879,7 +883,9 @@ namespace AppManager.Core {
                 // Capture per-action original args from the pristine bundled .desktop so that
                 // subsequent rewrites (e.g. from the GUI) have a stable source instead of
                 // re-parsing already-modified Exec lines.
-                record.original_action_args = capture_action_args(desktop_entry);
+                string[]? action_env;
+                record.original_action_args = capture_action_args(desktop_entry, out action_env);
+                record.original_action_env_vars = action_env;
 
                 if (record.apphub_policy != null && record.apphub_id != null
                     && !record.apphub_policy_customized && !record.is_self_app()) {
@@ -1109,22 +1115,25 @@ namespace AppManager.Core {
             }
         }
 
-        private string[]? capture_action_args(DesktopEntry entry) {
+        private string[]? capture_action_args(DesktopEntry entry, out string[]? env_vars) {
             var keyfile = entry.get_key_file();
             var actions_str = entry.actions ?? "";
             var captured = new Gee.ArrayList<string>();
+            var captured_env = new Gee.ArrayList<string>();
             foreach (var part in actions_str.split(";")) {
                 var name = part.strip();
                 if (name == "" || name == "Uninstall") continue;
                 var group = "Desktop Action %s".printf(name);
                 try {
                     if (!keyfile.has_group(group) || !keyfile.has_key(group, "Exec")) continue;
-                    var args = DesktopEntry.extract_exec_arguments(keyfile.get_string(group, "Exec")) ?? "";
-                    captured.add("%s=%s".printf(name, args));
+                    var parsed = DesktopEntry.parse_exec(keyfile.get_string(group, "Exec"));
+                    captured.add("%s=%s".printf(name, parsed.arguments ?? ""));
+                    foreach (var variable in parsed.env_vars) captured_env.add("%s=%s".printf(name, variable));
                 } catch (Error e) {
                     debug("capture_action_args %s: %s", group, e.message);
                 }
             }
+            env_vars = captured_env.to_array();
             return captured.size > 0 ? captured.to_array() : null;
         }
 
@@ -1137,7 +1146,7 @@ namespace AppManager.Core {
          * goes through here, which is what makes a permission change rewrite one
          * manifest instead of every line.
          */
-        private string launch_tokens(InstallationRecord record, string exec_target) {
+        private string launch_tokens(InstallationRecord record, string exec_target, string[]? env_vars = null) {
             if (!record.sandbox_enabled()) {
                 return "\"%s\"".printf(exec_target);
             }
@@ -1151,7 +1160,11 @@ namespace AppManager.Core {
             }
             // Record ids are checksums (optionally "-N"), so they need no quoting.
             parts.append(" %s --id=%s".printf(SANDBOX_RUN_VERB, record.id));
-            parts.append(" \"--target=%s\" --".printf(Utils.FileUtils.escape_exec_arg(exec_target)));
+            parts.append(" \"--target=%s\"".printf(Utils.FileUtils.escape_exec_arg(exec_target)));
+            foreach (var variable in env_vars ?? new string[0]) {
+                parts.append(" \"%s\"".printf(escape_env_exec_token("--env=" + variable)));
+            }
+            parts.append(" --");
             return parts.str;
         }
 
@@ -1159,21 +1172,31 @@ namespace AppManager.Core {
             if (env_vars == null || env_vars.length == 0) {
                 return "";
             }
-            var env_builder = new StringBuilder("env ");
+            // Use an absolute helper path: an old installation may have created ~/.local/bin/env.
+            var env_builder = new StringBuilder("/usr/bin/env -- ");
             foreach (var env_var in env_vars) {
                 if (env_var != null && env_var.strip() != "") {
                     var eq_pos = env_var.index_of_char('=');
                     if (eq_pos >= 0) {
-                        var name_part = env_var.substring(0, eq_pos);
-                        var value_part = env_var.substring(eq_pos + 1);
-                        env_builder.append("%s=\"%s\" ".printf(name_part, value_part));
-                    } else {
-                        env_builder.append(env_var);
-                        env_builder.append(" ");
+                        env_builder.append("\"%s\" ".printf(escape_env_exec_token(env_var)));
                     }
                 }
             }
             return env_builder.str;
+        }
+
+        private static string escape_env_exec_token(string token) {
+            return token.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("$", "\\$").replace("`", "\\`").replace("%", "%%");
+        }
+
+        private static string[] entry_env_vars(string[]? captured, string entry_name) {
+            var variables = new Gee.ArrayList<string>();
+            var prefix = entry_name + "=";
+            foreach (var pair in captured ?? new string[0]) {
+                if (pair.has_prefix(prefix)) variables.add(pair.substring(prefix.length));
+            }
+            return variables.to_array();
         }
 
         // The portion of custom_commandline_args the user added beyond the root entry's default
@@ -1219,8 +1242,9 @@ namespace AppManager.Core {
 
             // Update Exec with optional environment variables
             var args = effective_commandline_args ?? "";
-            var env_prefix = build_env_prefix(record.custom_env_vars);
-            var launcher = launch_tokens(record, exec_target);
+            var env_vars = record.get_effective_env_vars();
+            var env_prefix = record.sandbox_enabled() ? "" : build_env_prefix(env_vars);
+            var launcher = launch_tokens(record, exec_target, env_vars);
 
             string exec_line;
             if (args.strip() != "") {
@@ -1247,9 +1271,12 @@ namespace AppManager.Core {
                     var group = "Desktop Action %s".printf(action_name);
                     if (!keyfile.has_group(group)) continue;
                     var trail = (preserved + " " + extra_user_args).strip();
+                    var action_env = record.get_effective_env_vars(entry_env_vars(record.original_action_env_vars, action_name));
+                    var action_env_prefix = record.sandbox_enabled() ? "" : build_env_prefix(action_env);
+                    var action_launcher = launch_tokens(record, exec_target, action_env);
                     var line = trail == ""
-                        ? "%s%s".printf(env_prefix, launcher)
-                        : "%s%s %s".printf(env_prefix, launcher, trail);
+                        ? "%s%s".printf(action_env_prefix, action_launcher)
+                        : "%s%s %s".printf(action_env_prefix, action_launcher, trail);
                     keyfile.set_string(group, "Exec", line);
                 }
             }
@@ -1325,7 +1352,7 @@ namespace AppManager.Core {
          * Other fields (StartupWMClass, Categories, MimeType, NoDisplay, localized Name[xx])
          * are intentionally left untouched - these are what distinguish each component.
          */
-        private string rewrite_sub_desktop(string sub_desktop_path, string sub_binary_symlink_path, string? sub_icon_name, string pristine_args, InstallationRecord record) throws Error {
+        private string rewrite_sub_desktop(string sub_desktop_path, string sub_binary_symlink_path, string? sub_icon_name, string pristine_args, InstallationRecord record, string[]? bundled_env = null) throws Error {
             var entry = new DesktopEntry(sub_desktop_path);
 
             // Apply the same custom env vars and command-line args as the primary entry.
@@ -1333,14 +1360,15 @@ namespace AppManager.Core {
             // Only the args the user ADDED beyond the root default are appended - appending the
             // whole custom string would drag the root's default field codes (e.g. %F) into the
             // component's own args. Using pristine_args (not the current Exec) avoids compounding.
-            var env_prefix = build_env_prefix(record.custom_env_vars);
+            var env_vars = record.get_effective_env_vars(bundled_env);
+            var env_prefix = record.sandbox_enabled() ? "" : build_env_prefix(env_vars);
             var extra_user_args = user_added_commandline_args(record);
             var args = (pristine_args + " " + extra_user_args).strip();
             // The target stays the component's ~/.local/bin symlink even when sandboxed:
             // the launcher mounts the AppImage the link resolves to, but passes the
             // unresolved spelling on as ARGV0, which is how the AppImage runtime picks
             // the component to start.
-            var launcher = launch_tokens(record, sub_binary_symlink_path);
+            var launcher = launch_tokens(record, sub_binary_symlink_path, env_vars);
             string exec_line;
             if (args != "") {
                 exec_line = "%s%s %s".printf(env_prefix, launcher, args);
@@ -1467,14 +1495,15 @@ namespace AppManager.Core {
             var installed_icons    = new Gee.ArrayList<string>();
             var installed_symlinks = new Gee.ArrayList<string>();
             var sub_args           = new Gee.ArrayList<string>();
+            var sub_env            = new Gee.ArrayList<string>();
 
             // Sub-binary -> the Exec target its entries point at, "" when the AppImage ships no such
             // command. Memoised so a binary shared by several entries is probed and symlinked once.
             // The primary command always exists, so it never needs probing.
             var targets = new Gee.HashMap<string, string>();
-            // A sandboxed primary bin entry is a wrapper that re-enters sandbox-run, so
-            // pointing a sub-entry at it would recurse. Target the AppImage directly instead.
-            targets.set(primary_bin, record.sandbox_enabled()
+            // Bypass the primary wrapper: sandbox-run would recurse, and an env wrapper
+            // would overwrite a sub-entry's own variables with the root entry's defaults.
+            targets.set(primary_bin, (record.sandbox_enabled() || record.get_effective_env_vars().length > 0)
                 ? exec_path
                 : (record.bin_symlink ?? exec_path));
 
@@ -1492,7 +1521,8 @@ namespace AppManager.Core {
                         continue;
                     }
 
-                    var base_token = DesktopEntry.extract_base_exec_token(sub_exec);
+                    var parsed_exec = DesktopEntry.parse_exec(sub_exec);
+                    var base_token = parsed_exec.command;
                     if (base_token == null || base_token.strip() == "") {
                         debug("Skipping sub-desktop %s: empty Exec", sub_path);
                         continue;
@@ -1544,8 +1574,8 @@ namespace AppManager.Core {
                         }
                     }
 
-                    var pristine_args = DesktopEntry.extract_exec_arguments(sub_exec) ?? "";
-                    var contents = rewrite_sub_desktop(sub_path, target, icon_name_for_desktop, pristine_args, record);
+                    var pristine_args = parsed_exec.arguments ?? "";
+                    var contents = rewrite_sub_desktop(sub_path, target, icon_name_for_desktop, pristine_args, record, parsed_exec.env_vars);
                     Utils.FileUtils.ensure_parent(dest);
                     if (!GLib.FileUtils.set_contents(dest, contents)) {
                         warning("Failed to write sub-desktop %s", dest);
@@ -1574,6 +1604,7 @@ namespace AppManager.Core {
                     installed_desktops.add(dest);
                     installed_symlinks.add(target);
                     sub_args.add("%s=%s".printf(Path.get_basename(dest), pristine_args));
+                    foreach (var variable in parsed_exec.env_vars) sub_env.add("%s=%s".printf(Path.get_basename(dest), variable));
                     if (installed_icon_path != null) {
                         installed_icons.add(installed_icon_path);
                     }
@@ -1586,6 +1617,7 @@ namespace AppManager.Core {
             record.extra_icon_paths    = installed_icons.size    > 0 ? installed_icons.to_array()    : null;
             record.extra_bin_symlinks  = installed_symlinks.size > 0 ? installed_symlinks.to_array() : null;
             record.original_sub_args   = sub_args.size           > 0 ? sub_args.to_array()           : null;
+            record.original_sub_env_vars = sub_env.to_array();
         }
 
         private string build_uninstall_exec(string installed_path, bool is_self_install) {
@@ -1843,6 +1875,7 @@ namespace AppManager.Core {
         }
 
         private const string BIN_WRAPPER_HEADER = "#!/bin/sh\n# Generated by AppManager - launches this app inside its sandbox.\n";
+        private const string ENV_WRAPPER_HEADER = "#!/bin/sh\n# Generated by AppManager - launches this app with its environment.\n";
 
         private static bool bin_wrapper_is_ours(string path, InstallationRecord record) {
             try {
@@ -1854,6 +1887,8 @@ namespace AppManager.Core {
                 }
                 string contents;
                 GLib.FileUtils.get_contents(path, out contents);
+                if (contents.has_prefix(ENV_WRAPPER_HEADER + "# Installation: " + record.id + "\nexec /usr/bin/env -- ")
+                    && contents.has_suffix(" \"$@\"\n")) return true;
                 return contents.has_prefix(BIN_WRAPPER_HEADER + "exec ")
                     && contents.contains(" %s --id=%s --target=".printf(SANDBOX_RUN_VERB, record.id))
                     && contents.has_suffix(" -- \"$@\"\n");
@@ -1867,8 +1902,8 @@ namespace AppManager.Core {
         }
 
         /**
-         * Re-enters sandbox-run for terminal launches. Permissions live in the
-         * manifest, so permission edits do not need to change the wrapper.
+         * Applies the record's environment for terminal launches, or re-enters
+         * sandbox-run where the manifest provides that environment.
          */
         private string? create_bin_wrapper(InstallationRecord record, string exec_path, string slug) {
             try {
@@ -1892,9 +1927,18 @@ namespace AppManager.Core {
                 }
 
                 var content = new StringBuilder();
-                content.append(BIN_WRAPPER_HEADER);
-                content.append("exec %s %s --id=%s --target=%s -- \"$@\"\n".printf(
-                    launcher.str, SANDBOX_RUN_VERB, record.id, shell_quote(exec_path)));
+                if (record.sandbox_enabled()) {
+                    content.append(BIN_WRAPPER_HEADER);
+                    content.append("exec %s %s --id=%s --target=%s -- \"$@\"\n".printf(
+                        launcher.str, SANDBOX_RUN_VERB, record.id, shell_quote(exec_path)));
+                } else {
+                    content.append(ENV_WRAPPER_HEADER);
+                    content.append("# Installation: %s\nexec /usr/bin/env -- ".printf(record.id));
+                    foreach (var variable in record.get_effective_env_vars()) {
+                        content.append(shell_quote(variable) + " ");
+                    }
+                    content.append("%s \"$@\"\n".printf(shell_quote(exec_path)));
+                }
 
                 // Exclusive creation also protects a foreign file appearing after deletion.
                 var stream = script_file.create(FileCreateFlags.PRIVATE);
@@ -1902,13 +1946,13 @@ namespace AppManager.Core {
                 stream.write_all(content.str.data, out written);
                 stream.close();
                 Utils.FileUtils.ensure_executable(script_path);
-                debug("Created sandbox wrapper: %s", script_path);
+                debug("Created application wrapper: %s", script_path);
                 return script_path;
             } catch (Error e) {
                 if (e is IOError.EXISTS) {
                     record.bin_conflict_slug = slug;
                 }
-                warning("Failed to create sandbox wrapper for %s: %s", slug, e.message);
+                warning("Failed to create application wrapper for %s: %s", slug, e.message);
                 return null;
             }
         }
@@ -1918,24 +1962,24 @@ namespace AppManager.Core {
         }
 
         /**
-         * Chooses between a plain symlink and a sandbox wrapper for the app's
-         * ~/.local/bin entry, based on whether the record is sandboxed.
+         * Uses a wrapper when sandboxing or environment variables need applying;
+         * otherwise the app's ~/.local/bin entry is a plain symlink.
          *
-         * Note this makes record.bin_symlink a regular file for sandboxed apps.
-         * PathMigrationService therefore regenerates it rather than rewriting a link.
+         * record.bin_symlink can therefore be a regular file. PathMigrationService
+         * updates the paths inside these scripts as well as symlink targets.
          */
         private string? create_bin_launcher(InstallationRecord record, string exec_path, string slug) {
             record.bin_conflict_slug = null;
-            if (record.sandbox_enabled()) {
+            if (record.sandbox_enabled() || record.get_effective_env_vars().length > 0) {
                 return create_bin_wrapper(record, exec_path, slug);
             }
             var path = Path.build_filename(AppPaths.local_bin_dir, slug);
-            // Turning sandboxing off must replace our regular-file wrapper too.
+            // Clearing the environment or turning sandboxing off can restore a symlink.
             if (bin_wrapper_is_ours(path, record)) {
                 try {
                     File.new_for_path(path).delete(null);
                 } catch (Error e) {
-                    warning("Failed to remove sandbox wrapper for %s: %s", slug, e.message);
+                    warning("Failed to remove application wrapper for %s: %s", slug, e.message);
                     return null;
                 }
             }
@@ -2136,7 +2180,8 @@ namespace AppManager.Core {
                 }
                 try {
                     // sub_icon_name = null preserves the icon already written at install.
-                    var contents = rewrite_sub_desktop(sub_desktop, symlinks[i], null, args, record);
+                    var contents = rewrite_sub_desktop(sub_desktop, symlinks[i], null, args, record,
+                        entry_env_vars(record.original_sub_env_vars, basename));
                     if (!GLib.FileUtils.set_contents(sub_desktop, contents)) {
                         warning("Failed to write updated sub-desktop: %s", sub_desktop);
                     }

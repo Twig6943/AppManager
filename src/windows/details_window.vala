@@ -1400,7 +1400,7 @@ namespace AppManager {
             env_expander.description = _("Set custom environment variables for this app");
 
             // Load existing env vars
-            var env_vars = record.custom_env_vars ?? new string[0];
+            var env_vars = record.get_effective_env_vars();
 
             // Track all env var rows for management
             var env_rows = new Gee.ArrayList<Gtk.Widget>();
@@ -1426,7 +1426,7 @@ namespace AppManager {
                                     if (name_val == null) {
                                         name_val = entry_text.strip();
                                     } else {
-                                        value_val = entry_text.strip();
+                                        value_val = entry_text;
                                     }
                                 }
                                 child = child.get_next_sibling();
@@ -1438,7 +1438,7 @@ namespace AppManager {
                         }
                     }
                 }
-                record.custom_env_vars = new_env_vars.size > 0 ? new_env_vars.to_array() : null;
+                record.custom_env_vars = new_env_vars.to_array();
             };
 
             // Flush the current record to disk. Reads only the record (never the row widgets),
@@ -1477,7 +1477,6 @@ namespace AppManager {
                 var value_entry = new Gtk.Entry();
                 value_entry.set_placeholder_text(_("value"));
                 value_entry.set_hexpand(true);
-                value_entry.set_max_length(256);
                 value_entry.text = initial_value ?? "";
                 value_entry.changed.connect(() => { save_env_vars_from_rows(); });
                 var value_focus = new Gtk.EventControllerFocus();

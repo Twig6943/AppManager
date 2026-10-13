@@ -142,9 +142,9 @@ namespace AppManager.Core {
             m.extra_dirs = extras.to_array();
 
             var env_list = new Gee.ArrayList<string>();
-            foreach (var entry in record.custom_env_vars ?? new string[0]) {
+            foreach (var entry in record.get_effective_env_vars()) {
                 if (entry != null && entry.strip() != "" && entry.contains("=")) {
-                    env_list.add(entry.strip());
+                    env_list.add(entry);
                 }
             }
             m.env = env_list.to_array();

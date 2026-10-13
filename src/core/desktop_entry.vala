@@ -1,6 +1,12 @@
 using GLib;
 
 namespace AppManager.Core {
+    public class DesktopExec : Object {
+        public string? command { get; set; }
+        public string? arguments { get; set; }
+        public string[] env_vars { get; set; default = new string[0]; }
+    }
+
     public class DesktopEntry : Object {
         private KeyFile key_file;
         private string? file_path;
@@ -310,50 +316,80 @@ namespace AppManager.Core {
         }
 
         /**
-         * Extracts command line arguments from an Exec value (everything after first token).
+         * Splits an Exec into its application command, arguments and env assignments.
+         * Keep the argument substring verbatim: re-quoting it can break desktop field codes.
          */
-        public static string? extract_exec_arguments(string exec_value) {
+        public static DesktopExec parse_exec(string exec_value) throws ShellError {
+            var result = new DesktopExec();
             var trimmed = exec_value.strip();
-            int first_space = -1;
-            bool in_quotes = false;
-            
-            for (int i = 0; i < trimmed.length; i++) {
-                if (trimmed[i] == '"') {
-                    in_quotes = !in_quotes;
-                } else if (trimmed[i] == ' ' && !in_quotes) {
-                    first_space = i;
-                    break;
+            if (trimmed == "") return result;
+
+            var tokens = new Gee.ArrayList<string>();
+            var ends = new Gee.ArrayList<int>();
+            int pos = 0;
+            while (pos < trimmed.length) {
+                while (pos < trimmed.length && trimmed[pos].isspace()) pos++;
+                if (pos == trimmed.length) break;
+                int start = pos;
+                char quote = '\0';
+                while (pos < trimmed.length) {
+                    var ch = trimmed[pos];
+                    if (ch == '\\' && quote != '\'') {
+                        pos += 2;
+                        continue;
+                    }
+                    if (quote != '\0') {
+                        if (ch == quote) quote = '\0';
+                    } else if (ch == '"' || ch == '\'') {
+                        quote = ch;
+                    } else if (ch.isspace()) {
+                        break;
+                    }
+                    pos++;
+                }
+                string[] decoded;
+                Shell.parse_argv(trimmed.substring(start, int.min(pos, trimmed.length) - start), out decoded);
+                tokens.add(decoded[0]);
+                ends.add(pos);
+            }
+
+            int command_index = 0;
+            var env_vars = new Gee.ArrayList<string>();
+            if (tokens[0] == "env" || tokens[0] == "/usr/bin/env" || tokens[0] == "/bin/env") {
+                command_index = 1;
+                if (command_index < tokens.size && tokens[command_index] == "--") command_index++;
+                while (command_index < tokens.size && tokens[command_index].index_of_char('=') > 0) {
+                    env_vars.add(tokens[command_index].replace("%%", "%"));
+                    command_index++;
+                }
+                if (command_index < tokens.size && tokens[command_index] == "--") command_index++;
+                if (command_index == tokens.size || tokens[command_index].has_prefix("-")) {
+                    throw new ShellError.FAILED("Unsupported env Exec prefix: %s", exec_value);
                 }
             }
-            
-            if (first_space != -1) {
-                return trimmed.substring(first_space + 1).strip();
+            result.command = tokens[command_index];
+            var arguments = trimmed.substring(ends[command_index]).strip();
+            result.arguments = arguments == "" ? null : arguments;
+            result.env_vars = env_vars.to_array();
+            return result;
+        }
+
+        public static string? extract_exec_arguments(string exec_value) {
+            try {
+                return parse_exec(exec_value).arguments;
+            } catch (Error e) {
+                debug("Failed to parse desktop Exec: %s", e.message);
+                return null;
             }
-            return null;
         }
 
         public static string? extract_base_exec_token(string exec_value) {
-            var trimmed = exec_value.strip();
-            if (trimmed == "") {
+            try {
+                return parse_exec(exec_value).command;
+            } catch (Error e) {
+                debug("Failed to parse desktop Exec: %s", e.message);
                 return null;
             }
-
-            var builder = new StringBuilder();
-            bool in_quotes = false;
-            for (int i = 0; i < trimmed.length; i++) {
-                var ch = trimmed[i];
-                if (ch == '"') {
-                    in_quotes = !in_quotes;
-                    continue;
-                }
-                if (ch == ' ' && !in_quotes) {
-                    break;
-                }
-                builder.append_c(ch);
-            }
-
-            var token = builder.str.strip();
-            return token == "" ? null : token;
         }
 
         public static string strip_appdir_prefix(string token) {
@@ -395,22 +431,7 @@ namespace AppManager.Core {
                 return installed_path ?? "";
             }
 
-            // Extract first token respecting quotes
-            bool in_quotes = false;
-            var builder = new StringBuilder();
-            for (int i = 0; i < trimmed.length; i++) {
-                var ch = trimmed[i];
-                if (ch == '"') {
-                    in_quotes = !in_quotes;
-                    continue;
-                }
-                if (ch == ' ' && !in_quotes) {
-                    break;
-                }
-                builder.append_c(ch);
-            }
-
-            var base_exec = builder.str.strip();
+            var base_exec = extract_base_exec_token(trimmed) ?? "";
             if (base_exec == "") {
                 return installed_path ?? "";
             }
