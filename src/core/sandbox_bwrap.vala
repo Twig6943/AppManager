@@ -90,6 +90,7 @@ namespace AppManager.Core {
             add_namespaces();
             add_host_root();
             add_runtime_dir();
+            add_tmp_dir();
             if (!add_home()) {
                 return null;
             }
@@ -320,6 +321,29 @@ namespace AppManager.Core {
             // The AppImage payload, mounted outside and bound at the identical path so
             // $APPDIR means the same thing on both sides.
             add2("--ro-bind", mount_dir, mount_dir);
+        }
+
+        /**
+         * $TMPDIR at a path that means the same thing inside the sandbox and out, like
+         * the cache dir below. Chromium on GNOME gives the tray host an IconThemePath
+         * under $TMPDIR, which a private /tmp turns into a dead path: the tray item
+         * shows no icon. Flatpak's Electron apps use $XDG_RUNTIME_DIR/app/<id> for the
+         * same reason. The id is hashed to keep the path short: Chromium also puts its
+         * single-instance socket here, and a socket path must fit in 107 bytes.
+         */
+        private void add_tmp_dir() {
+            var id = manifest.app_id.strip();
+            if (id == "") {
+                return;
+            }
+            var dir = Path.build_filename(AppPaths.sandbox_runtime_dir, "tmp",
+                Checksum.compute_for_string(ChecksumType.SHA256, id).substring(0, 16));
+            if (DirUtils.create_with_parents(dir, 0700) != 0) {
+                warning("Sandbox: cannot create %s: %s", dir, Posix.strerror(Posix.errno));
+                return;
+            }
+            add2("--bind", dir, dir);
+            setenv("TMPDIR", dir);
         }
 
         private bool add_home() {
