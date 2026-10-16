@@ -852,6 +852,12 @@ namespace AppManager {
             service_rows.set("system-authentication", polkit_row);
             services_group.add(polkit_row);
 
+            var screenshots_row = build_permission_row(
+                _("Screenshots"), _("Take screenshots with the desktop's screenshot tool. They are saved in Pictures, so the app also needs that folder."),
+                "screen-shared-symbolic", Core.SandboxConfig.service_enabled(record, "screenshots"));
+            service_rows.set("screenshots", screenshots_row);
+            services_group.add(screenshots_row);
+
             prefs_page.add(services_group);
 
             var folders_group = new Adw.PreferencesGroup();

@@ -50,6 +50,7 @@ namespace AppManager.Core {
         public bool network_info = false;
         public bool keyring = false;
         public bool polkit = false;
+        public bool screenshots = false;
         public bool full_session_bus = false;
         public bool imported_policy = false;
         public string display = "legacy";
@@ -97,6 +98,7 @@ namespace AppManager.Core {
             m.network_info = record.sandbox_allow_network_info;
             m.keyring = record.sandbox_allow_keyring;
             m.polkit = record.sandbox_allow_polkit;
+            m.screenshots = record.sandbox_allow_screenshots;
             m.full_session_bus = record.sandbox_allow_dbus;
             m.imported_policy = record.sandbox_session_bus != null || record.sandbox_system_bus != null;
             m.display = record.sandbox_display ?? "legacy";
@@ -159,7 +161,7 @@ namespace AppManager.Core {
             // no service is declared. Its absence is what made some apps crash once a
             // desktop service opened the filtered bus.
             bool session_bus_reason = m.notifications || m.tray || m.media_controls
-                || m.accessibility || m.keyring || m.session_rules.length > 0;
+                || m.accessibility || m.keyring || m.screenshots || m.session_rules.length > 0;
             var ownership = new Gee.ArrayList<string>();
             if (session_bus_reason) {
                 foreach (var name in SandboxIdentity.own_names_for(record)) ownership.add(name);
@@ -238,6 +240,7 @@ namespace AppManager.Core {
                 kf.set_boolean(GROUP_PERMISSIONS, "network-info", network_info);
                 kf.set_boolean(GROUP_PERMISSIONS, "keyring", keyring);
                 kf.set_boolean(GROUP_PERMISSIONS, "polkit", polkit);
+                kf.set_boolean(GROUP_PERMISSIONS, "screenshots", screenshots);
                 kf.set_boolean(GROUP_PERMISSIONS, "full-session-bus", full_session_bus);
 
                 kf.set_string_list(GROUP_FILESYSTEM, "xdg-dirs", xdg_dirs);
@@ -314,6 +317,7 @@ namespace AppManager.Core {
             m.network_info = read_bool(kf, GROUP_PERMISSIONS, "network-info", false);
             m.keyring = read_bool(kf, GROUP_PERMISSIONS, "keyring", false);
             m.polkit = read_bool(kf, GROUP_PERMISSIONS, "polkit", false);
+            m.screenshots = read_bool(kf, GROUP_PERMISSIONS, "screenshots", false);
             m.full_session_bus = read_bool(kf, GROUP_PERMISSIONS, "full-session-bus", false);
             m.accessibility = read_bool(kf, GROUP_PERMISSIONS, "accessibility", m.version < 3 && (m.session_bus_access == "legacy" || m.full_session_bus));
 
@@ -398,7 +402,7 @@ namespace AppManager.Core {
         }
 
         public bool needs_session_bus() {
-            return !full_session_bus && (notifications || tray || media_controls || (version >= 3 && accessibility) || keyring || own_names.length > 0 || session_rules.length > 0);
+            return !full_session_bus && (notifications || tray || media_controls || (version >= 3 && accessibility) || keyring || screenshots || own_names.length > 0 || session_rules.length > 0);
         }
 
         /**

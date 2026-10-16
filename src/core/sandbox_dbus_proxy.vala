@@ -282,7 +282,25 @@ namespace AppManager.Core {
             if (manifest.keyring) {
                 foreach (var name in KEYRING_NAMES) rules.add("--talk=" + name);
             }
+            if (manifest.screenshots) {
+                rules.add_all(screenshot_rules());
+            }
 
+            return rules;
+        }
+
+        /**
+         * The Screenshot portal alone. The portal sees this proxy, a host process, so
+         * it returns the plain file path rather than a document-portal one. Properties
+         * stay refused: GTK reads the FileChooser and OpenURI versions from them and
+         * would switch to portals this proxy refuses, with no fallback.
+         */
+        public static Gee.ArrayList<string> screenshot_rules() {
+            var rules = new Gee.ArrayList<string>();
+            const string service = "org.freedesktop.portal.Desktop";
+            const string path = "/org/freedesktop/portal/desktop";
+            rules.add("--call=%s=org.freedesktop.portal.Screenshot.*@%s".printf(service, path));
+            rules.add("--call=%s=org.freedesktop.portal.Request.Close@%s/request/*".printf(service, path));
             return rules;
         }
 
