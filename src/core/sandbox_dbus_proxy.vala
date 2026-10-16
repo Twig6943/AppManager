@@ -225,9 +225,21 @@ namespace AppManager.Core {
                     if (!name.has_suffix(".*")) rules.add("--own=" + name + ".*");
                 }
             }
+            if (manifest.keyring) {
+                foreach (var name in KEYRING_NAMES) rules.add("--talk=" + name);
+            }
 
             return rules;
         }
+
+        // Secret Service (GNOME Keyring, KeePassXC, recent KWallet) and the KWallet
+        // names Chromium and Electron call directly. Whole-service grants: the proxy
+        // cannot filter on call arguments, so per-item access is not expressible.
+        public const string[] KEYRING_NAMES = {
+            "org.freedesktop.secrets",
+            "org.kde.kwalletd5",
+            "org.kde.kwalletd6"
+        };
 
         // How far to enumerate tray-item names. The app is pid 2 in its own pid
         // namespace in the ordinary case; a few more cover an Electron app whose tray

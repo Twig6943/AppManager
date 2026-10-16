@@ -840,6 +840,12 @@ namespace AppManager {
             service_rows.set("network-information", network_info_row);
             services_group.add(network_info_row);
 
+            var keyring_row = build_permission_row(
+                _("Keyring"), _("Save logins in GNOME Keyring or KWallet. The app can also read every password stored there, so grant it only to apps you trust."),
+                "dialog-password-symbolic", Core.SandboxConfig.service_enabled(record, "keyring"));
+            service_rows.set("keyring", keyring_row);
+            services_group.add(keyring_row);
+
             prefs_page.add(services_group);
 
             var folders_group = new Adw.PreferencesGroup();

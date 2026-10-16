@@ -48,6 +48,7 @@ namespace AppManager.Core {
         public string[] media_names = new string[0];
         public bool location = false;
         public bool network_info = false;
+        public bool keyring = false;
         public bool full_session_bus = false;
         public bool imported_policy = false;
         public string display = "legacy";
@@ -93,6 +94,7 @@ namespace AppManager.Core {
             m.media_names = SandboxIdentity.media_names_for(record);
             m.location = record.sandbox_allow_location;
             m.network_info = record.sandbox_allow_network_info;
+            m.keyring = record.sandbox_allow_keyring;
             m.full_session_bus = record.sandbox_allow_dbus;
             m.imported_policy = record.sandbox_session_bus != null || record.sandbox_system_bus != null;
             m.display = record.sandbox_display ?? "legacy";
@@ -153,7 +155,7 @@ namespace AppManager.Core {
             // no service is declared. Its absence is what made some apps crash once a
             // desktop service opened the filtered bus.
             bool session_bus_reason = m.notifications || m.tray || m.media_controls
-                || m.accessibility || m.session_rules.length > 0;
+                || m.accessibility || m.keyring || m.session_rules.length > 0;
             var ownership = new Gee.ArrayList<string>();
             if (session_bus_reason) {
                 foreach (var name in SandboxIdentity.own_names_for(record)) ownership.add(name);
@@ -230,6 +232,7 @@ namespace AppManager.Core {
                 kf.set_string_list(GROUP_PERMISSIONS, "media-names", media_names);
                 kf.set_boolean(GROUP_PERMISSIONS, "location", location);
                 kf.set_boolean(GROUP_PERMISSIONS, "network-info", network_info);
+                kf.set_boolean(GROUP_PERMISSIONS, "keyring", keyring);
                 kf.set_boolean(GROUP_PERMISSIONS, "full-session-bus", full_session_bus);
 
                 kf.set_string_list(GROUP_FILESYSTEM, "xdg-dirs", xdg_dirs);
@@ -304,6 +307,7 @@ namespace AppManager.Core {
             m.media_names = read_list(kf, GROUP_PERMISSIONS, "media-names");
             m.location = read_bool(kf, GROUP_PERMISSIONS, "location", false);
             m.network_info = read_bool(kf, GROUP_PERMISSIONS, "network-info", false);
+            m.keyring = read_bool(kf, GROUP_PERMISSIONS, "keyring", false);
             m.full_session_bus = read_bool(kf, GROUP_PERMISSIONS, "full-session-bus", false);
             m.accessibility = read_bool(kf, GROUP_PERMISSIONS, "accessibility", m.version < 3 && (m.session_bus_access == "legacy" || m.full_session_bus));
 
@@ -388,7 +392,7 @@ namespace AppManager.Core {
         }
 
         public bool needs_session_bus() {
-            return !full_session_bus && (notifications || tray || media_controls || (version >= 3 && accessibility) || own_names.length > 0 || session_rules.length > 0);
+            return !full_session_bus && (notifications || tray || media_controls || (version >= 3 && accessibility) || keyring || own_names.length > 0 || session_rules.length > 0);
         }
 
         /**

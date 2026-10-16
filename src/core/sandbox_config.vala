@@ -54,6 +54,7 @@ namespace AppManager.Core {
             record.sandbox_allow_bluetooth = false;
             record.sandbox_allow_location = false;
             record.sandbox_allow_network_info = false;
+            record.sandbox_allow_keyring = false;
 
             record.sandbox_allow_documents = false;
             record.sandbox_allow_desktop = false;
@@ -128,12 +129,12 @@ namespace AppManager.Core {
                     record.sandbox_allow_gpu, record.sandbox_allow_camera, record.sandbox_allow_input, record.sandbox_allow_dbus,
                     record.sandbox_allow_notifications, record.sandbox_allow_tray, record.sandbox_allow_media_controls,
                     record.sandbox_allow_accessibility, record.sandbox_allow_network_info, record.sandbox_allow_bluetooth,
-                    record.sandbox_allow_location, record.sandbox_share_processes, record.sandbox_share_ipc };
+                    record.sandbox_allow_location, record.sandbox_allow_keyring, record.sandbox_share_processes, record.sandbox_share_ipc };
                 bool[] wanted_flags = { expected.sandbox_allow_network, expected.sandbox_allow_audio, expected.sandbox_allow_x11,
                     expected.sandbox_allow_gpu, expected.sandbox_allow_camera, expected.sandbox_allow_input, expected.sandbox_allow_dbus,
                     expected.sandbox_allow_notifications, expected.sandbox_allow_tray, expected.sandbox_allow_media_controls,
                     expected.sandbox_allow_accessibility, expected.sandbox_allow_network_info, expected.sandbox_allow_bluetooth,
-                    expected.sandbox_allow_location, expected.sandbox_share_processes, expected.sandbox_share_ipc };
+                    expected.sandbox_allow_location, expected.sandbox_allow_keyring, expected.sandbox_share_processes, expected.sandbox_share_ipc };
                 for (int i = 0; i < actual_flags.length; i++) if (actual_flags[i] != wanted_flags[i]) return false;
                 foreach (var location in new string[] { "downloads", "documents", "desktop", "pictures", "videos", "music" }) {
                     if (folder_access(record, location) != folder_access(expected, location)) return false;
@@ -164,6 +165,7 @@ namespace AppManager.Core {
                 && !r.sandbox_allow_bluetooth
                 && !r.sandbox_allow_location
                 && !r.sandbox_allow_network_info
+                && !r.sandbox_allow_keyring
                 && !r.sandbox_allow_documents
                 && !r.sandbox_allow_desktop
                 && !r.sandbox_allow_pictures
@@ -230,7 +232,7 @@ namespace AppManager.Core {
 
         public static bool service_has_full_bus(InstallationRecord r, string service) {
             if (service in new string[] { "bluetooth", "location", "network-information" }) return r.sandbox_system_bus == "full";
-            return r.sandbox_allow_dbus && service in new string[] { "notifications", "system-tray", "media-controls" };
+            return r.sandbox_allow_dbus && service in new string[] { "notifications", "system-tray", "media-controls", "keyring" };
         }
 
         public static bool service_enabled(InstallationRecord r, string service) {
@@ -244,6 +246,7 @@ namespace AppManager.Core {
                 case "bluetooth": enabled = r.sandbox_allow_bluetooth; break;
                 case "location": enabled = r.sandbox_allow_location; break;
                 case "network-information": enabled = r.sandbox_allow_network_info; break;
+                case "keyring": enabled = r.sandbox_allow_keyring; break;
             }
             if (enabled) return true;
             bool system_service = service in new string[] { "bluetooth", "location", "network-information" };
@@ -265,6 +268,7 @@ namespace AppManager.Core {
                 case "bluetooth": return name == "org.bluez";
                 case "location": return name == "org.freedesktop.GeoClue2";
                 case "network-information": return name == "org.freedesktop.NetworkManager";
+                case "keyring": return name in SandboxDbusProxy.KEYRING_NAMES;
             }
             return false;
         }
@@ -285,6 +289,7 @@ namespace AppManager.Core {
                 case "bluetooth": r.sandbox_allow_bluetooth = allowed; break;
                 case "location": r.sandbox_allow_location = allowed; break;
                 case "network-information": r.sandbox_allow_network_info = allowed; break;
+                case "keyring": r.sandbox_allow_keyring = allowed; break;
             }
             // A user override replaces equivalent imported rules, rather than leaving
             // an invisible grant behind an Off switch. Unrelated rules stay intact.
