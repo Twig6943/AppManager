@@ -563,6 +563,14 @@ x-scheme-handler/https=app-manager-open-uri.desktop
                 setenv("GIO_USE_VFS", "local");
             }
 
+            // libadwaita reads the color scheme and accent color only from the Settings
+            // portal, which the filtered bus hides, unless told to fall back to GSettings
+            // (the ro-bound dconf). Read at startup only: dconf change notifications do
+            // not reach the sandbox.
+            if (!manifest.full_session_bus) {
+                setenv("ADW_DISABLE_PORTAL", "1");
+            }
+
             foreach (var name in new string[] {
                 "USER", "LOGNAME", "LANG", "LANGUAGE", "TERM", "COLORTERM",
                 "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP"
