@@ -217,12 +217,12 @@ namespace AppManager.Core {
          * the boundary that matters.
          *
          * Where the helper sits depends on who built the AppImage: electron-builder
-         * leaves it at the AppDir root, sharun puts it in bin/, and an AppDir assembled
-         * by hand can nest it a level deeper still - so the AppDir is searched rather
-         * than one path probed.
+         * leaves it at the AppDir root, sharun puts it in bin/, and CEF apps (Karere)
+         * nest it in usr/lib/cef/ - so the AppDir is searched rather than one path
+         * probed.
          */
         private bool needs_no_sandbox() {
-            return has_chrome_sandbox(mount_dir, 3);
+            return has_chrome_sandbox(mount_dir, 4);
         }
 
         private bool has_chrome_sandbox(string dir, int depth) {
