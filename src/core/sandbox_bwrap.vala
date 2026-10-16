@@ -31,6 +31,9 @@ namespace AppManager.Core {
         public string? a11y_bus_socket = null;      // accessibility bus socket
         public string? wayland_socket = null;       // security-context socket, if any
         public string? link_pipe = null;            // host FIFO of the link opener
+        public string? bus_socket_dir = null;       // proxy sockets created after bwrap starts
+        public int info_fd = -1;                    // bwrap reports the app's pid here
+        public int block_fd = -1;                   // bwrap waits on this before the app runs
 
         private SandboxManifest manifest;
         private string mount_dir;
@@ -119,6 +122,12 @@ namespace AppManager.Core {
             if (sync_fd >= 0) {
                 add("--sync-fd", sync_fd.to_string());
             }
+            if (info_fd >= 0) {
+                add("--info-fd", info_fd.to_string());
+            }
+            if (block_fd >= 0) {
+                add("--block-fd", block_fd.to_string());
+            }
 
             add("--argv0", argv0);
             args.add("--");
@@ -147,8 +156,10 @@ namespace AppManager.Core {
         public int[] preserved_fds() {
             var list = new Gee.ArrayList<int>();
             list.add_all(data_fds);
-            if (sync_fd >= 0) {
-                list.add(sync_fd);
+            foreach (var fd in new int[] { sync_fd, info_fd, block_fd }) {
+                if (fd >= 0) {
+                    list.add(fd);
+                }
             }
             return list.to_array();
         }
@@ -1021,6 +1032,11 @@ x-scheme-handler/https=app-manager-open-uri.desktop
         }
 
         private void add_buses() {
+            if (bus_socket_dir != null) {
+                // bwrap mounts before the proxy listens, so the directory is bound
+                // and its sockets linked to where the app looks for them.
+                add2("--ro-bind", bus_socket_dir, bus_socket_dir);
+            }
             if (manifest.full_session_bus) {
                 // No proxy: the real socket, and with it every desktop service. The user
                 // asked for this explicitly and the UI says what it costs.
@@ -1032,13 +1048,13 @@ x-scheme-handler/https=app-manager-open-uri.desktop
                 }
             } else if (session_bus_socket != null) {
                 var dest = Path.build_filename(runtime_base, "bus");
-                add2("--ro-bind", session_bus_socket, dest);
+                bind_bus_socket(session_bus_socket, dest);
                 setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=%s".printf(dest));
             }
             if (system_bus_socket != null) {
                 // Both spellings: some apps have /var/run baked in.
-                add2("--ro-bind", system_bus_socket, "/run/dbus/system_bus_socket");
-                add2("--ro-bind", system_bus_socket, "/var/run/dbus/system_bus_socket");
+                bind_bus_socket(system_bus_socket, "/run/dbus/system_bus_socket");
+                bind_bus_socket(system_bus_socket, "/var/run/dbus/system_bus_socket");
             } else if (manifest.system_bus_access == "full") {
                 var address = Environment.get_variable("DBUS_SYSTEM_BUS_ADDRESS") ?? "unix:path=/run/dbus/system_bus_socket";
                 var socket = socket_path_in(address);
@@ -1073,8 +1089,18 @@ x-scheme-handler/https=app-manager-open-uri.desktop
             if (a11y_bus_socket == null) {
                 return;
             }
-            add2("--ro-bind", a11y_bus_socket, A11Y_BUS_PATH);
+            bind_bus_socket(a11y_bus_socket, A11Y_BUS_PATH);
             setenv("AT_SPI_BUS_ADDRESS", "unix:path=%s".printf(A11Y_BUS_PATH));
+        }
+
+        // A proxy socket in bus_socket_dir may not exist yet, so it is linked from the
+        // bound directory. Anything else is bound as before.
+        private void bind_bus_socket(string socket, string dest) {
+            if (bus_socket_dir != null && Path.get_dirname(socket) == bus_socket_dir) {
+                add2("--symlink", socket, dest);
+            } else {
+                add2("--ro-bind", socket, dest);
+            }
         }
 
         /**

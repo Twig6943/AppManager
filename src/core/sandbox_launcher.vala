@@ -143,6 +143,9 @@ namespace AppManager.Core {
             }
 
             SandboxDbusProxy? proxy = null;
+            // An app sharing the host's pids claims tray names with its real pid, which
+            // exists only once bwrap has forked. Its proxy starts while bwrap waits.
+            bool deferred = manifest.share_processes;
             if (manifest.needs_bus_proxy()) {
                 if (AppPaths.xdg_dbus_proxy_path == null) {
                     printerr("%s: %s is configured to reach desktop services through a filtered bus, but xdg-dbus-proxy was not found.\n",
@@ -152,7 +155,8 @@ namespace AppManager.Core {
                     mount.release();
                     return 3;
                 }
-                proxy = SandboxDbusProxy.start(manifest, instance_id);
+                proxy = deferred ? SandboxDbusProxy.prepare(manifest, instance_id, true)
+                                 : SandboxDbusProxy.start(manifest, instance_id);
                 if (proxy == null) {
                     printerr("%s: could not start the filtered bus for %s; refusing to launch it with an open bus.\n",
                         SANDBOX_RUN_VERB, target);
@@ -167,7 +171,9 @@ namespace AppManager.Core {
                 builder.system_bus_socket = proxy.system_socket;
                 builder.a11y_bus_socket = proxy.a11y_socket;
                 builder.sync_fd = proxy.sync_read_fd;
+                builder.bus_socket_dir = proxy.socket_dir;
             }
+            deferred = proxy != null && deferred;
             if (manifest.full_session_bus && manifest.accessibility) {
                 // No proxy to filter it, so the real accessibility socket - consistent
                 // with the session bus the user has already opened up here.
@@ -195,8 +201,16 @@ namespace AppManager.Core {
             var link_pipe = start_link_opener(instance_id);
             builder.link_pipe = link_pipe;
 
+            // A deferred proxy needs bwrap to report the app's pid, then wait.
+            int[] info = { -1, -1 };
+            int[] block = { -1, -1 };
+            if (deferred && open_pipe(info) && open_pipe(block)) {
+                builder.info_fd = info[1];
+                builder.block_fd = block[0];
+            }
+
             int status;
-            var argv = builder.compose(target, app_args.to_array());
+            var argv = (!deferred || builder.block_fd >= 0) ? builder.compose(target, app_args.to_array()) : null;
             if (argv == null) {
                 printerr("%s: could not build the sandbox for %s\n", SANDBOX_RUN_VERB, target);
                 status = 3;
@@ -206,10 +220,26 @@ namespace AppManager.Core {
                 // The sync pipe especially: while this process still holds a copy, the
                 // proxy cannot notice the app exiting.
                 builder.close_fds();
+                bool released = true;
+                if (deferred) {
+                    close_fd(ref info[1]);
+                    close_fd(ref block[0]);
+                    released = pid > 0 && release_with_proxy(proxy, pid, info[0], block[1]);
+                }
                 if (proxy != null) {
                     proxy.detach_sync_fd();
                 }
                 status = (pid > 0) ? wait_for(pid) : 3;
+                if (!released) {
+                    printerr("%s: could not start the filtered bus for %s; refusing to launch it with an open bus.\n",
+                        SANDBOX_RUN_VERB, target);
+                    status = 3;
+                }
+            }
+            foreach (var fd in new int[] { info[0], info[1], block[0], block[1] }) {
+                if (fd >= 0) {
+                    Posix.close(fd);
+                }
             }
 
             if (proxy != null) {
@@ -325,6 +355,72 @@ namespace AppManager.Core {
             Posix.signal(Posix.Signal.INT, forward_signal);
             Posix.signal(Posix.Signal.HUP, forward_signal);
             return pid;
+        }
+
+        /**
+         * Reads the app's host pid from the waiting bwrap, starts the proxy with it and
+         * lets the app run. On failure the sandbox is killed rather than released:
+         * bwrap starts the app on a closed block pipe too, and it would find no bus.
+         */
+        private static bool release_with_proxy(SandboxDbusProxy proxy, Posix.pid_t bwrap,
+                                               int info_read, int block_write) {
+            var app_pid = read_child_pid(info_read);
+            if (app_pid > 0 && proxy.launch(app_pid)) {
+                uint8[] go = { 1 };
+                if (Posix.write(block_write, go, 1) == 1) {
+                    return true;
+                }
+            }
+            if (app_pid > 0) {
+                Posix.kill(app_pid, Posix.Signal.KILL);
+            }
+            Posix.kill(bwrap, Posix.Signal.KILL);
+            return false;
+        }
+
+        // bwrap's --info-fd output: a JSON object with "child-pid", then EOF.
+        private static int read_child_pid(int fd) {
+            var data = new ByteArray();
+            var buffer = new uint8[512];
+            ssize_t n;
+            while ((n = Posix.read(fd, buffer, buffer.length)) != 0) {
+                if (n < 0) {
+                    if (Posix.errno == Posix.EINTR) {
+                        continue;
+                    }
+                    break;
+                }
+                data.append(buffer[0:n]);
+            }
+            try {
+                var parser = new Json.Parser();
+                parser.load_from_data((string) data.data, (ssize_t) data.len);
+                var root = parser.get_root();
+                if (root != null && root.get_node_type() == Json.NodeType.OBJECT
+                    && root.get_object().has_member("child-pid")) {
+                    return (int) root.get_object().get_int_member("child-pid");
+                }
+            } catch (Error e) {
+                warning("Sandbox: unreadable bwrap info: %s", e.message);
+            }
+            return -1;
+        }
+
+        private static bool open_pipe(int[] fds) {
+            if (Posix.pipe(fds) != 0) {
+                warning("Sandbox: cannot create a pipe: %s", Posix.strerror(Posix.errno));
+                return false;
+            }
+            SandboxDbusProxy.set_cloexec(fds[0]);
+            SandboxDbusProxy.set_cloexec(fds[1]);
+            return true;
+        }
+
+        private static void close_fd(ref int fd) {
+            if (fd >= 0) {
+                Posix.close(fd);
+                fd = -1;
+            }
         }
 
         /**

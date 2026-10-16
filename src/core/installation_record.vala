@@ -147,6 +147,9 @@ namespace AppManager.Core {
         // Secret Service and KWallet. Off by default: neither separates apps, so this
         // exposes every stored password, not just the app's own.
         public bool sandbox_allow_keyring { get; set; default = false; }
+        // Polkit, for "unlock with system authentication". Off by default: polkit
+        // identifies the caller by host pid, so this also shares host processes.
+        public bool sandbox_allow_polkit { get; set; default = false; }
         // Stable sandbox identity, generated once when sandboxing is first enabled and
         // carried across upgrades: the compositor's security context and the sandbox
         // cache dir are keyed by it, so it must never change under an app.
@@ -215,6 +218,7 @@ namespace AppManager.Core {
             sandbox_allow_location      = other.sandbox_allow_location;
             sandbox_allow_network_info  = other.sandbox_allow_network_info;
             sandbox_allow_keyring       = other.sandbox_allow_keyring;
+            sandbox_allow_polkit        = other.sandbox_allow_polkit;
             sandbox_allow_downloads     = other.sandbox_allow_downloads;
             sandbox_allow_documents     = other.sandbox_allow_documents;
             sandbox_allow_desktop       = other.sandbox_allow_desktop;
@@ -560,6 +564,7 @@ namespace AppManager.Core {
             put_bool(builder, "sandbox_allow_location", sandbox_allow_location);
             put_bool(builder, "sandbox_allow_network_info", sandbox_allow_network_info);
             put_bool(builder, "sandbox_allow_keyring", sandbox_allow_keyring);
+            put_bool(builder, "sandbox_allow_polkit", sandbox_allow_polkit);
             put_bool(builder, "sandbox_share_processes", sandbox_share_processes);
             put_bool(builder, "sandbox_share_ipc", sandbox_share_ipc);
             put_string(builder, "sandbox_display", sandbox_display);
@@ -639,6 +644,7 @@ namespace AppManager.Core {
             sandbox_allow_location   = read_bool(obj, "sandbox_allow_location", sandbox_allow_location);
             sandbox_allow_network_info = read_bool(obj, "sandbox_allow_network_info", false);
             sandbox_allow_keyring = read_bool(obj, "sandbox_allow_keyring", false);
+            sandbox_allow_polkit = read_bool(obj, "sandbox_allow_polkit", false);
             sandbox_share_processes = read_bool(obj, "sandbox_share_processes", false);
             sandbox_share_ipc = read_bool(obj, "sandbox_share_ipc", false);
             sandbox_display = obj.has_member("sandbox_display") ? obj.get_string_member("sandbox_display") : null;

@@ -55,6 +55,7 @@ namespace AppManager.Core {
             record.sandbox_allow_location = false;
             record.sandbox_allow_network_info = false;
             record.sandbox_allow_keyring = false;
+            record.sandbox_allow_polkit = false;
 
             record.sandbox_allow_documents = false;
             record.sandbox_allow_desktop = false;
@@ -129,12 +130,14 @@ namespace AppManager.Core {
                     record.sandbox_allow_gpu, record.sandbox_allow_camera, record.sandbox_allow_input, record.sandbox_allow_dbus,
                     record.sandbox_allow_notifications, record.sandbox_allow_tray, record.sandbox_allow_media_controls,
                     record.sandbox_allow_accessibility, record.sandbox_allow_network_info, record.sandbox_allow_bluetooth,
-                    record.sandbox_allow_location, record.sandbox_allow_keyring, record.sandbox_share_processes, record.sandbox_share_ipc };
+                    record.sandbox_allow_location, record.sandbox_allow_keyring, record.sandbox_allow_polkit,
+                    record.sandbox_share_processes, record.sandbox_share_ipc };
                 bool[] wanted_flags = { expected.sandbox_allow_network, expected.sandbox_allow_audio, expected.sandbox_allow_x11,
                     expected.sandbox_allow_gpu, expected.sandbox_allow_camera, expected.sandbox_allow_input, expected.sandbox_allow_dbus,
                     expected.sandbox_allow_notifications, expected.sandbox_allow_tray, expected.sandbox_allow_media_controls,
                     expected.sandbox_allow_accessibility, expected.sandbox_allow_network_info, expected.sandbox_allow_bluetooth,
-                    expected.sandbox_allow_location, expected.sandbox_allow_keyring, expected.sandbox_share_processes, expected.sandbox_share_ipc };
+                    expected.sandbox_allow_location, expected.sandbox_allow_keyring, expected.sandbox_allow_polkit,
+                    expected.sandbox_share_processes, expected.sandbox_share_ipc };
                 for (int i = 0; i < actual_flags.length; i++) if (actual_flags[i] != wanted_flags[i]) return false;
                 foreach (var location in new string[] { "downloads", "documents", "desktop", "pictures", "videos", "music" }) {
                     if (folder_access(record, location) != folder_access(expected, location)) return false;
@@ -166,6 +169,7 @@ namespace AppManager.Core {
                 && !r.sandbox_allow_location
                 && !r.sandbox_allow_network_info
                 && !r.sandbox_allow_keyring
+                && !r.sandbox_allow_polkit
                 && !r.sandbox_allow_documents
                 && !r.sandbox_allow_desktop
                 && !r.sandbox_allow_pictures
@@ -243,6 +247,9 @@ namespace AppManager.Core {
                 case "system-tray": enabled = r.sandbox_allow_tray; break;
                 case "media-controls": enabled = r.sandbox_allow_media_controls; break;
                 case "accessibility": return r.sandbox_allow_accessibility;
+                // The switch alone: a full system bus or an imported rule reaches
+                // polkit, but only the switch shares the host pids it checks.
+                case "system-authentication": return r.sandbox_allow_polkit;
                 case "bluetooth": enabled = r.sandbox_allow_bluetooth; break;
                 case "location": enabled = r.sandbox_allow_location; break;
                 case "network-information": enabled = r.sandbox_allow_network_info; break;
@@ -290,6 +297,7 @@ namespace AppManager.Core {
                 case "location": r.sandbox_allow_location = allowed; break;
                 case "network-information": r.sandbox_allow_network_info = allowed; break;
                 case "keyring": r.sandbox_allow_keyring = allowed; break;
+                case "system-authentication": r.sandbox_allow_polkit = allowed; break;
             }
             // A user override replaces equivalent imported rules, rather than leaving
             // an invisible grant behind an Off switch. Unrelated rules stay intact.

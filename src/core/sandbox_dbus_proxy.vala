@@ -24,10 +24,17 @@ namespace AppManager.Core {
         public string? session_socket { get; private set; default = null; }
         public string? system_socket { get; private set; default = null; }
         public string? a11y_socket { get; private set; default = null; }
+        // Set when the sockets live in a directory of this launch's own. See prepare().
+        public string? socket_dir { get; private set; default = null; }
         // The end to hand to the app's bwrap as --sync-fd.
         public int sync_read_fd { get; private set; default = -1; }
 
         private Posix.pid_t pid = 0;
+        private SandboxManifest manifest;
+        private string proxy_path;
+        private string? session_address = null;
+        private string? a11y_address = null;
+        private int sync_write_fd = -1;
 
         /**
          * Starts a proxy for `manifest`. Returns null when the proxy cannot be started,
@@ -38,51 +45,54 @@ namespace AppManager.Core {
          * do not collide.
          */
         public static SandboxDbusProxy? start(SandboxManifest manifest, string instance_id) {
+            var self = prepare(manifest, instance_id, false);
+            return (self != null && self.launch(0)) ? self : null;
+        }
+
+        /**
+         * Everything short of forking the proxy: socket paths, bus addresses and the
+         * sync pipe. With `own_dir` the sockets go in a directory of their own, which
+         * bwrap can bind before the proxy has created them. That lets a launch whose
+         * app shares the host's pids start bwrap first and call launch() with the pid.
+         */
+        public static SandboxDbusProxy? prepare(SandboxManifest manifest, string instance_id, bool own_dir) {
             var proxy_path = AppPaths.xdg_dbus_proxy_path;
             if (proxy_path == null) {
                 return null;
             }
 
             var socket_dir = Path.build_filename(AppPaths.sandbox_runtime_dir, "dbusproxy");
+            var prefix = instance_id + "-";
+            if (own_dir) {
+                socket_dir = Path.build_filename(socket_dir, instance_id);
+                prefix = "";
+            }
             if (DirUtils.create_with_parents(socket_dir, 0700) != 0) {
                 warning("Sandbox: cannot create %s: %s", socket_dir, Posix.strerror(Posix.errno));
                 return null;
             }
 
             var self = new SandboxDbusProxy();
-            var args = new Gee.ArrayList<string>();
+            self.manifest = manifest;
+            self.proxy_path = proxy_path;
+            if (own_dir) {
+                self.socket_dir = socket_dir;
+            }
             if (manifest.needs_session_bus()) {
-                var session_address = host_session_bus_address();
-                if (session_address == null) {
+                self.session_address = host_session_bus_address();
+                if (self.session_address == null) {
                     warning("Sandbox: no session bus address to proxy");
+                    self.stop();
                     return null;
                 }
-                self.session_socket = Path.build_filename(socket_dir, "%s-session".printf(instance_id));
-                args.add(session_address);
-                args.add(self.session_socket);
-                args.add("--filter");
-                args.add_all(session_rules(manifest));
+                self.session_socket = Path.build_filename(socket_dir, prefix + "session");
             }
-
             if (manifest.needs_system_bus()) {
-                self.system_socket = Path.build_filename(socket_dir, "%s-system".printf(instance_id));
-                args.add(Environment.get_variable("DBUS_SYSTEM_BUS_ADDRESS") ?? "unix:path=/run/dbus/system_bus_socket");
-                args.add(self.system_socket);
-                args.add("--filter");
-                args.add_all(system_rules(manifest));
+                self.system_socket = Path.build_filename(socket_dir, prefix + "system");
             }
-
-            var a11y_address = manifest.accessibility && !manifest.full_session_bus ? a11y_bus_address() : null;
-            if (a11y_address != null) {
-                self.a11y_socket = Path.build_filename(socket_dir, "%s-a11y".printf(instance_id));
-                args.add(a11y_address);
-                args.add(self.a11y_socket);
-                args.add("--filter");
-                // Required, not cosmetic: at-spi addresses the registry by its unique
-                // name, and without this the proxy never reports those name changes, so
-                // none of the rules below can match.
-                args.add("--sloppy-names");
-                args.add_all(a11y_rules());
+            self.a11y_address = manifest.accessibility && !manifest.full_session_bus ? a11y_bus_address() : null;
+            if (self.a11y_address != null) {
+                self.a11y_socket = Path.build_filename(socket_dir, prefix + "a11y");
             }
 
             // A leftover socket from a supervisor that was killed would make bind fail.
@@ -93,56 +103,92 @@ namespace AppManager.Core {
             int[] sync_fds = new int[2];
             if (Posix.pipe(sync_fds) != 0) {
                 warning("Sandbox: cannot create bus proxy sync pipe: %s", Posix.strerror(Posix.errno));
+                self.stop();
                 return null;
             }
+            // Only the proxy may hold the write end, and only bwrap the read end:
+            // anything else spawned meanwhile must not inherit either.
+            set_cloexec(sync_fds[0]);
+            set_cloexec(sync_fds[1]);
+            self.sync_read_fd = sync_fds[0];
+            self.sync_write_fd = sync_fds[1];
+            return self;
+        }
+
+        /**
+         * Forks the proxy and waits until it listens. `app_pid` is the app's host pid
+         * when it shares the host's pids, else 0. Stops and cleans up on failure.
+         */
+        public bool launch(int app_pid) {
+            var args = new Gee.ArrayList<string>();
+            if (session_socket != null) {
+                args.add(session_address);
+                args.add(session_socket);
+                args.add("--filter");
+                args.add_all(session_rules(manifest, app_pid));
+            }
+
+            if (system_socket != null) {
+                args.add(Environment.get_variable("DBUS_SYSTEM_BUS_ADDRESS") ?? "unix:path=/run/dbus/system_bus_socket");
+                args.add(system_socket);
+                args.add("--filter");
+                args.add_all(system_rules(manifest));
+            }
+
+            if (a11y_socket != null) {
+                args.add(a11y_address);
+                args.add(a11y_socket);
+                args.add("--filter");
+                // Required, not cosmetic: at-spi addresses the registry by its unique
+                // name, and without this the proxy never reports those name changes, so
+                // none of the rules below can match.
+                args.add("--sloppy-names");
+                args.add_all(a11y_rules());
+            }
+
             int args_fd = SandboxBwrap.content_fd(nul_separated(args));
-
             if (args_fd < 0) {
-                Posix.close(sync_fds[0]);
-                Posix.close(sync_fds[1]);
-                return null;
+                stop();
+                return false;
             }
 
-            var argv = build_argv(proxy_path, sync_fds[1], args_fd);
+            var argv = build_argv(proxy_path, sync_write_fd, args_fd);
 
             var child = Posix.fork();
             if (child < 0) {
                 warning("Sandbox: cannot fork the bus proxy: %s", Posix.strerror(Posix.errno));
-                Posix.close(sync_fds[0]);
-                Posix.close(sync_fds[1]);
                 Posix.close(args_fd);
-                return null;
+                stop();
+                return false;
             }
             if (child == 0) {
-                clear_cloexec(sync_fds[1]);
+                clear_cloexec(sync_write_fd);
                 clear_cloexec(args_fd);
-                Posix.close(sync_fds[0]);
+                Posix.close(sync_read_fd);
                 Posix.execvp(argv[0], argv);
                 Posix.perror(argv[0]);
                 Posix._exit(127);
             }
 
-            self.pid = child;
+            pid = child;
             Posix.close(args_fd);
             // Our own copy of the write end has to go before the read below, or a proxy
             // that dies on startup would leave the read blocking on a pipe this process
             // is itself holding open.
-            Posix.close(sync_fds[1]);
+            Posix.close(sync_write_fd);
+            sync_write_fd = -1;
 
             uint8[] ready = new uint8[1];
             ssize_t got;
-            while ((got = Posix.read(sync_fds[0], ready, 1)) < 0 && Posix.errno == Posix.EINTR) {
+            while ((got = Posix.read(sync_read_fd, ready, 1)) < 0 && Posix.errno == Posix.EINTR) {
                 // Retry: a signal arriving during startup is not a failure.
             }
             if (got != 1) {
                 warning("Sandbox: the bus proxy did not come up");
-                Posix.close(sync_fds[0]);
-                self.stop();
-                return null;
+                stop();
+                return false;
             }
-
-            self.sync_read_fd = sync_fds[0];
-            return self;
+            return true;
         }
 
         /**
@@ -160,23 +206,31 @@ namespace AppManager.Core {
         /**
          * Reaps the proxy. It normally exits by itself when the app's sandbox drops the
          * sync pipe, so this mostly just collects the corpse; a proxy still running
-         * after the app is gone is asked to leave.
+         * after the app is gone is asked to leave. Also undoes a prepare() that was
+         * never launched.
          */
         public void stop() {
-            if (pid <= 0) {
-                return;
-            }
-            int status;
-            if (Posix.waitpid(pid, out status, Posix.WNOHANG) == 0) {
-                Posix.kill(pid, Posix.Signal.TERM);
-                while (Posix.waitpid(pid, out status, 0) < 0 && Posix.errno == Posix.EINTR) {
-                    // Retry.
+            if (pid > 0) {
+                int status;
+                if (Posix.waitpid(pid, out status, Posix.WNOHANG) == 0) {
+                    Posix.kill(pid, Posix.Signal.TERM);
+                    while (Posix.waitpid(pid, out status, 0) < 0 && Posix.errno == Posix.EINTR) {
+                        // Retry.
+                    }
                 }
+                pid = 0;
             }
-            pid = 0;
+            detach_sync_fd();
+            if (sync_write_fd >= 0) {
+                Posix.close(sync_write_fd);
+                sync_write_fd = -1;
+            }
             unlink_if_present(session_socket);
             unlink_if_present(system_socket);
             unlink_if_present(a11y_socket);
+            if (socket_dir != null) {
+                DirUtils.remove(socket_dir);
+            }
         }
 
         /**
@@ -197,7 +251,7 @@ namespace AppManager.Core {
          * Session-bus rules. Everything not listed is refused, including the services
          * that make sandbox escape trivial - systemd's StartTransientUnit above all.
          */
-        public static Gee.ArrayList<string> session_rules(SandboxManifest manifest) {
+        public static Gee.ArrayList<string> session_rules(SandboxManifest manifest, int app_pid = 0) {
             var rules = new Gee.ArrayList<string>();
             add_exact_rules(rules, manifest.session_rules);
 
@@ -217,7 +271,7 @@ namespace AppManager.Core {
 
             if (manifest.tray) {
                 rules.add("--talk=org.kde.StatusNotifierWatcher");
-                rules.add_all(status_notifier_item_names());
+                rules.add_all(status_notifier_item_names(app_pid));
             }
             if (manifest.media_controls) {
                 foreach (var name in manifest.media_names) {
@@ -241,11 +295,10 @@ namespace AppManager.Core {
             "org.kde.kwalletd6"
         };
 
-        // How far to enumerate tray-item names. The app is pid 2 in its own pid
-        // namespace in the ordinary case; a few more cover an Electron app whose tray
-        // lives in a forked helper, and a couple of item ids cover an app with more
-        // than one indicator.
-        private const int SNI_MAX_PID = 16;
+        // How far to enumerate tray-item names from the app's own pid. A few pids
+        // cover an Electron app whose tray lives in a forked helper, and a couple of
+        // item ids cover an app with more than one indicator.
+        private const int SNI_PID_SPAN = 15;
         private const int SNI_MAX_ITEM = 4;
 
         /**
@@ -262,11 +315,13 @@ namespace AppManager.Core {
          * org.kde.StatusNotifierWatcher itself, or a KDE wallet name. Enumerating the
          * handful of names actually reachable is uglier and strictly safer: the pid
          * namespace makes them small and predictable, since bwrap is pid 1 and the app
-         * is pid 2.
+         * is pid 2. An app sharing the host's pids gets the same span from `app_pid`,
+         * its real pid, which the launcher reads from bwrap before starting the proxy.
          */
-        private static Gee.ArrayList<string> status_notifier_item_names() {
+        private static Gee.ArrayList<string> status_notifier_item_names(int app_pid) {
             var rules = new Gee.ArrayList<string>();
-            for (int pid = 2; pid <= SNI_MAX_PID; pid++) {
+            int first = app_pid > 0 ? app_pid : 2;
+            for (int pid = first; pid < first + SNI_PID_SPAN; pid++) {
                 for (int item = 1; item <= SNI_MAX_ITEM; item++) {
                     rules.add("--own=org.kde.StatusNotifierItem-%d-%d".printf(pid, item));
                     rules.add("--own=org.freedesktop.StatusNotifierItem-%d-%d".printf(pid, item));
@@ -279,7 +334,7 @@ namespace AppManager.Core {
          * System-bus rules. Only spawned when a toggle needs it. NetworkManager has
          * an information-only permission; UPower is not exposed.
          */
-        private static Gee.ArrayList<string> system_rules(SandboxManifest manifest) {
+        public static Gee.ArrayList<string> system_rules(SandboxManifest manifest) {
             var rules = new Gee.ArrayList<string>();
             add_exact_rules(rules, manifest.system_rules);
             if (manifest.bluetooth) {
@@ -290,6 +345,27 @@ namespace AppManager.Core {
             }
             if (manifest.network_info) {
                 rules.add_all(network_info_rules());
+            }
+            if (manifest.polkit) {
+                rules.add_all(polkit_rules());
+            }
+            return rules;
+        }
+
+        /**
+         * Polkit, narrowed to a client checking its own authorization. Registering an
+         * authentication agent stays refused: an agent is handed the password prompts
+         * of whichever process it names.
+         */
+        public static Gee.ArrayList<string> polkit_rules() {
+            var rules = new Gee.ArrayList<string>();
+            const string service = "org.freedesktop.PolicyKit1";
+            const string path = "/org/freedesktop/PolicyKit1/Authority";
+            foreach (var member in new string[] { "CheckAuthorization", "CancelCheckAuthorization", "EnumerateActions" }) {
+                rules.add("--call=%s=%s.Authority.%s@%s".printf(service, service, member, path));
+            }
+            foreach (var member in new string[] { "Get", "GetAll" }) {
+                rules.add("--call=%s=org.freedesktop.DBus.Properties.%s@%s".printf(service, member, path));
             }
             return rules;
         }
@@ -456,6 +532,13 @@ namespace AppManager.Core {
                 result[offset++] = 0;
             }
             return result;
+        }
+
+        public static void set_cloexec(int fd) {
+            int flags = Posix.fcntl(fd, Posix.F_GETFD);
+            if (flags >= 0) {
+                Posix.fcntl(fd, Posix.F_SETFD, flags | Posix.FD_CLOEXEC);
+            }
         }
 
         private static void clear_cloexec(int fd) {

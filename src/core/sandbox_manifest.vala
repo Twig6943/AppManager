@@ -49,6 +49,7 @@ namespace AppManager.Core {
         public bool location = false;
         public bool network_info = false;
         public bool keyring = false;
+        public bool polkit = false;
         public bool full_session_bus = false;
         public bool imported_policy = false;
         public string display = "legacy";
@@ -95,10 +96,13 @@ namespace AppManager.Core {
             m.location = record.sandbox_allow_location;
             m.network_info = record.sandbox_allow_network_info;
             m.keyring = record.sandbox_allow_keyring;
+            m.polkit = record.sandbox_allow_polkit;
             m.full_session_bus = record.sandbox_allow_dbus;
             m.imported_policy = record.sandbox_session_bus != null || record.sandbox_system_bus != null;
             m.display = record.sandbox_display ?? "legacy";
-            m.share_processes = record.sandbox_share_processes;
+            // Polkit looks the caller's pid up on the host. A namespaced pid names
+            // another process there, and the check fails.
+            m.share_processes = record.sandbox_share_processes || record.sandbox_allow_polkit;
             m.share_ipc = record.sandbox_share_ipc;
             m.session_bus_access = record.sandbox_session_bus ?? "legacy";
             m.system_bus_access = record.sandbox_system_bus ?? "legacy";
@@ -233,6 +237,7 @@ namespace AppManager.Core {
                 kf.set_boolean(GROUP_PERMISSIONS, "location", location);
                 kf.set_boolean(GROUP_PERMISSIONS, "network-info", network_info);
                 kf.set_boolean(GROUP_PERMISSIONS, "keyring", keyring);
+                kf.set_boolean(GROUP_PERMISSIONS, "polkit", polkit);
                 kf.set_boolean(GROUP_PERMISSIONS, "full-session-bus", full_session_bus);
 
                 kf.set_string_list(GROUP_FILESYSTEM, "xdg-dirs", xdg_dirs);
@@ -308,6 +313,7 @@ namespace AppManager.Core {
             m.location = read_bool(kf, GROUP_PERMISSIONS, "location", false);
             m.network_info = read_bool(kf, GROUP_PERMISSIONS, "network-info", false);
             m.keyring = read_bool(kf, GROUP_PERMISSIONS, "keyring", false);
+            m.polkit = read_bool(kf, GROUP_PERMISSIONS, "polkit", false);
             m.full_session_bus = read_bool(kf, GROUP_PERMISSIONS, "full-session-bus", false);
             m.accessibility = read_bool(kf, GROUP_PERMISSIONS, "accessibility", m.version < 3 && (m.session_bus_access == "legacy" || m.full_session_bus));
 
@@ -396,10 +402,11 @@ namespace AppManager.Core {
         }
 
         /**
-         * Whether a system proxy is needed: BlueZ, GeoClue2 or network information.
+         * Whether a system proxy is needed: BlueZ, GeoClue2, network information or
+         * polkit.
          */
         public bool needs_system_bus() {
-            return system_bus_access != "full" && (bluetooth || location || network_info || system_rules.length > 0);
+            return system_bus_access != "full" && (bluetooth || location || network_info || polkit || system_rules.length > 0);
         }
 
         private static string read_string(KeyFile kf, string group, string key, string fallback) {

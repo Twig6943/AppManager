@@ -846,6 +846,12 @@ namespace AppManager {
             service_rows.set("keyring", keyring_row);
             services_group.add(keyring_row);
 
+            var polkit_row = build_permission_row(
+                _("System authentication"), _("Unlock with your system password or fingerprint. The app can also see your other processes and read their command lines and environment, so grant it only to apps you trust."),
+                "system-lock-screen-symbolic", Core.SandboxConfig.service_enabled(record, "system-authentication"));
+            service_rows.set("system-authentication", polkit_row);
+            services_group.add(polkit_row);
+
             prefs_page.add(services_group);
 
             var folders_group = new Adw.PreferencesGroup();
