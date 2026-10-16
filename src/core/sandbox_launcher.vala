@@ -192,6 +192,9 @@ namespace AppManager.Core {
                 builder.wayland_socket = wayland.socket_path;
             }
 
+            var link_pipe = start_link_opener(instance_id);
+            builder.link_pipe = link_pipe;
+
             int status;
             var argv = builder.compose(target, app_args.to_array());
             if (argv == null) {
@@ -215,8 +218,78 @@ namespace AppManager.Core {
             if (wayland != null) {
                 wayland.cleanup();
             }
+            if (link_pipe != null) {
+                GLib.FileUtils.unlink(link_pipe);
+            }
             mount.release();
             return status;
+        }
+
+        // A longer URL is refused rather than truncated into a different one.
+        private const int MAX_LINK_LENGTH = 8192;
+
+        /**
+         * Opens the web links a sandboxed app asks for in the host's default browser,
+         * which the sandbox cannot reach. The app writes one URL per line to a FIFO
+         * bound into the sandbox (SandboxBwrap.add_link_opener) and a thread here
+         * reads them. Only http(s) is opened, and the check runs out here, where the
+         * app cannot change it. Returns the FIFO's host path, or null.
+         */
+        private static string? start_link_opener(string instance_id) {
+            var dir = Path.build_filename(AppPaths.sandbox_runtime_dir, "open-uri");
+            DirUtils.create_with_parents(dir, 0700);
+            var path = Path.build_filename(dir, instance_id);
+            if (Posix.mkfifo(path, 0600) != 0) {
+                warning("Sandbox: cannot create %s: %s", path, Posix.strerror(Posix.errno));
+                return null;
+            }
+            // Read-write, so reads block instead of hitting EOF while no writer is open.
+            int fd = Posix.open(path, Posix.O_RDWR | Posix.O_CLOEXEC);
+            if (fd < 0) {
+                warning("Sandbox: cannot open %s: %s", path, Posix.strerror(Posix.errno));
+                GLib.FileUtils.unlink(path);
+                return null;
+            }
+            new Thread<void>("open-uri", () => { read_links(fd); });
+            return path;
+        }
+
+        private static void read_links(int fd) {
+            var line = new StringBuilder();
+            var buffer = new uint8[4096];
+            while (true) {
+                var n = Posix.read(fd, (void*) buffer, buffer.length);
+                if (n < 0 && Posix.errno == Posix.EINTR) {
+                    continue;
+                }
+                if (n <= 0) {
+                    return;
+                }
+                for (int i = 0; i < n; i++) {
+                    if (buffer[i] == (uint8) '\n') {
+                        open_link(line.str);
+                        line.truncate(0);
+                    } else if (line.len <= MAX_LINK_LENGTH) {
+                        line.append_c((char) buffer[i]);
+                    }
+                }
+            }
+        }
+
+        private static void open_link(string text) {
+            try {
+                if (text.length > MAX_LINK_LENGTH) {
+                    throw new UriError.FAILED("too long");
+                }
+                var uri = Uri.parse(text, UriFlags.NONE);
+                var scheme = uri.get_scheme().ascii_down();
+                if ((scheme != "http" && scheme != "https") || (uri.get_host() ?? "") == "") {
+                    throw new UriError.BAD_SCHEME("only http and https links are opened");
+                }
+                AppInfo.launch_default_for_uri(uri.to_string(), null);
+            } catch (Error e) {
+                warning("Sandbox: not opening link %s: %s", text, e.message);
+            }
         }
 
         /**

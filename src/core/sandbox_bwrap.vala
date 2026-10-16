@@ -30,6 +30,7 @@ namespace AppManager.Core {
         public string? system_bus_socket = null;    // proxied system bus socket
         public string? a11y_bus_socket = null;      // accessibility bus socket
         public string? wayland_socket = null;       // security-context socket, if any
+        public string? link_pipe = null;            // host FIFO of the link opener
 
         private SandboxManifest manifest;
         private string mount_dir;
@@ -91,6 +92,7 @@ namespace AppManager.Core {
             add_host_root();
             add_runtime_dir();
             add_tmp_dir();
+            add_link_opener();
             if (!add_home()) {
                 return null;
             }
@@ -346,6 +348,58 @@ namespace AppManager.Core {
             setenv("TMPDIR", dir);
         }
 
+        /**
+         * Web links leave through sandbox-run, which checks them and opens them in the
+         * host browser (SandboxLauncher.start_link_opener). Two ways in, both writing
+         * the URL to the bound FIFO: an xdg-open first on PATH for Electron, Chromium
+         * and Qt, and a GIO default handler for http(s) for GTK. Any other xdg-open
+         * call goes to the real one and still resolves inside the sandbox.
+         */
+        private void add_link_opener() {
+            if (link_pipe == null) {
+                return;
+            }
+            var dir = helper_dir();
+            var pipe = Path.build_filename(dir, "open-uri");
+            var opener = Path.build_filename(dir, "bin", "xdg-open");
+            var script = """#!/bin/sh
+case "$1" in
+    http://*|https://*) printf '%s\n' "$1" > '@PIPE@'; exit $? ;;
+esac
+exec /usr/bin/xdg-open "$@"
+""".replace("@PIPE@", pipe);
+            var desktop = """[Desktop Entry]
+Type=Application
+Name=Host browser
+Exec=@OPENER@ %u
+NoDisplay=true
+MimeType=x-scheme-handler/http;x-scheme-handler/https;
+""".replace("@OPENER@", opener);
+            var mimeapps = """[Default Applications]
+x-scheme-handler/http=app-manager-open-uri.desktop
+x-scheme-handler/https=app-manager-open-uri.desktop
+""";
+            int script_fd = data_fd(script);
+            int desktop_fd = data_fd(desktop);
+            int mimeapps_fd = data_fd(mimeapps);
+            if (script_fd < 0 || desktop_fd < 0 || mimeapps_fd < 0) {
+                link_pipe = null;
+                return;
+            }
+            add2("--bind", link_pipe, pipe);
+            add1("--perms");
+            add1("0755");
+            add2("--ro-bind-data", script_fd.to_string(), opener);
+            add2("--ro-bind-data", desktop_fd.to_string(),
+                Path.build_filename(dir, "share", "applications", "app-manager-open-uri.desktop"));
+            add2("--ro-bind-data", mimeapps_fd.to_string(), Path.build_filename(dir, "xdg", "mimeapps.list"));
+        }
+
+        // AppManager's own corner of the sandbox's private runtime dir.
+        private string helper_dir() {
+            return Path.build_filename(runtime_base, DATA_DIRNAME);
+        }
+
         private bool add_home() {
             if (manifest.home.strip() == "") {
                 warning("Sandbox: manifest has no home path");
@@ -481,7 +535,11 @@ namespace AppManager.Core {
         private void add_environment(string argv0) {
             // A minimal PATH: the app's own bundled binaries come from $APPDIR, which
             // its AppRun prepends itself.
-            setenv("PATH", "/usr/local/bin:/usr/bin:/bin");
+            var path = "/usr/local/bin:/usr/bin:/bin";
+            if (link_pipe != null) {
+                path = Path.build_filename(helper_dir(), "bin") + ":" + path;
+            }
+            setenv("PATH", path);
             setenv("HOME", home);
             setenv("SHELL", "/bin/sh");
             setenv("XDG_RUNTIME_DIR", runtime_base);
@@ -496,9 +554,17 @@ namespace AppManager.Core {
 
             foreach (var name in new string[] {
                 "USER", "LOGNAME", "LANG", "LANGUAGE", "TERM", "COLORTERM",
-                "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS"
+                "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP"
             }) {
                 copy_env(name);
+            }
+            if (link_pipe != null) {
+                // The link opener's GIO handler has to win the default-app lookup.
+                prepend_env("XDG_DATA_DIRS", Path.build_filename(helper_dir(), "share"), "/usr/local/share:/usr/share");
+                prepend_env("XDG_CONFIG_DIRS", Path.build_filename(helper_dir(), "xdg"), "/etc/xdg");
+            } else {
+                copy_env("XDG_DATA_DIRS");
+                copy_env("XDG_CONFIG_DIRS");
             }
             foreach (var name in new string[] { "XCURSOR_THEME", "XCURSOR_SIZE", "GTK_THEME", "QT_QPA_PLATFORMTHEME" }) copy_env(name);
             foreach (var name in Environment.list_variables()) {
@@ -1064,6 +1130,13 @@ namespace AppManager.Core {
             if (value != null) {
                 setenv(name, value);
             }
+        }
+
+        // An unset or empty search path means the XDG spec default, which a bare
+        // prepend would otherwise replace.
+        private void prepend_env(string name, string dir, string spec_default) {
+            var value = Environment.get_variable(name);
+            setenv(name, dir + ":" + (value == null || value == "" ? spec_default : value));
         }
 
         /**
