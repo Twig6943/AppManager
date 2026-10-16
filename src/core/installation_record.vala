@@ -23,6 +23,12 @@ namespace AppManager.Core {
         public string[]? extra_desktop_files { get; set; }   // ~/.local/share/applications/<name>.desktop
         public string[]? extra_icon_paths    { get; set; }   // ~/.local/share/icons/<name>.<ext>
         public string[]? extra_bin_symlinks  { get; set; }   // ~/.local/bin/<sub-binary>
+        // Icon-theme files exported from the AppImage into ~/.local/share/icons/<theme>/... .
+        // Flatpak exports $FLATPAK_ID* icons from the app to the host theme automatically; an
+        // AppImage needs its installer to do it, otherwise names the app resolves at runtime
+        // (e.g. the SNI tray icon "<app-id>-tray-symbolic") render as missing for the shell.
+        // Full destination paths, removed on uninstall so the theme doesn't go stale.
+        public string[]? theme_icon_paths    { get; set; }
         // Name the "Add to PATH" toggle could not claim in ~/.local/bin because a file AppManager
         // did not create already uses it; carries the reason out to the toast. Not persisted.
         // Installs report the same conflict via the warning in create_bin_symlink (issue #175).
@@ -435,6 +441,14 @@ namespace AppManager.Core {
                 }
                 builder.end_array();
             }
+            if (theme_icon_paths != null && theme_icon_paths.length > 0) {
+                builder.set_member_name("theme_icon_paths");
+                builder.begin_array();
+                foreach (var p in theme_icon_paths) {
+                    builder.add_string_value(p);
+                }
+                builder.end_array();
+            }
 
             // Pre-release channel preference
             builder.set_member_name("prerelease_enabled");
@@ -782,6 +796,14 @@ namespace AppManager.Core {
                     list[i] = arr.get_string_element(i);
                 }
                 record.extra_bin_symlinks = list;
+            }
+            if (obj.has_member("theme_icon_paths")) {
+                var arr = obj.get_array_member("theme_icon_paths");
+                var list = new string[arr.get_length()];
+                for (uint i = 0; i < arr.get_length(); i++) {
+                    list[i] = arr.get_string_element(i);
+                }
+                record.theme_icon_paths = list;
             }
 
             // Legacy support: migrate old update_link/web_page to original_* fields

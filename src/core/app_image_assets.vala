@@ -336,6 +336,124 @@ namespace AppManager.Core {
             return null;
         }
 
+        /**
+         * Extract every file in the AppImage's icon themes whose file name starts with
+         * one of id_prefixes, from both AppDir layouts (usr/share for standard AppDirs,
+         * share for sharun-packed ones such as anylinux builds).
+         *
+         * These are the icons a packaged app resolves by name at runtime - tray icons
+         * ("<app-id>-tray-symbolic"), notification and window icons. Flatpak makes them
+         * work by exporting $FLATPAK_ID* files into the host's icon theme; an AppImage
+         * has no such export, so without this the shell cannot resolve the names (e.g.
+         * a StatusNotifierItem tray icon shows up blank). The installer mirrors the
+         * Flatpak rule and copies the matches into ~/.local/share/icons.
+         *
+         * Returns paths relative to the icons root (e.g.
+         * "hicolor/symbolic/apps/io.foo-tray-symbolic.svg"), so the caller can join
+         * them onto the destination theme directory. Symlinked matches are replaced
+         * in place by a copy of their target's content, keeping the advertised name.
+         */
+        public static string[] extract_theme_icons(string appimage_path, string temp_root, string[] id_prefixes) {
+            var results = new ArrayList<string>();
+            if (id_prefixes.length == 0) {
+                return results.to_array();
+            }
+
+            var theme_root = Path.build_filename(temp_root, "theme_icons");
+            DirUtils.create_with_parents(theme_root, 0755);
+
+            string[] share_roots = { "usr/share", "share" };
+            var seen = new HashSet<string>();
+
+            foreach (var share_root in share_roots) {
+                // '**' walks the whole tree; sharun/dwarfs images need it because a
+                // single '*' does not descend in their glob dialect. '*' stays as the
+                // fallback for images whose extractor rejects '**'.
+                if (!extract_entry(appimage_path, theme_root, "%s/icons/**".printf(share_root))) {
+                    extract_entry(appimage_path, theme_root, "%s/icons/*".printf(share_root));
+                }
+
+                var icons_dir = Path.build_filename(theme_root, share_root, "icons");
+                if (FileUtils.test(icons_dir, FileTest.IS_DIR)) {
+                    collect_theme_icons(icons_dir, icons_dir, id_prefixes, seen, results);
+                }
+            }
+
+            return results.to_array();
+        }
+
+        private static void collect_theme_icons(string dir_path, string icons_root, string[] id_prefixes, HashSet<string> seen, ArrayList<string> results) {
+            try {
+                var dir = Dir.open(dir_path);
+                string? name;
+                while ((name = dir.read_name()) != null) {
+                    var path = Path.build_filename(dir_path, name);
+                    if (FileUtils.test(path, FileTest.IS_DIR)) {
+                        // Never descend through a link: theme trees do not use them,
+                        // and one pointing back up would recurse forever.
+                        if (!FileUtils.test(path, FileTest.IS_SYMLINK)) {
+                            collect_theme_icons(path, icons_root, id_prefixes, seen, results);
+                        }
+                        continue;
+                    }
+
+                    bool matches = false;
+                    foreach (var prefix in id_prefixes) {
+                        if (name.has_prefix(prefix)) {
+                            matches = true;
+                            break;
+                        }
+                    }
+                    if (!matches) {
+                        continue;
+                    }
+
+                    var rel = path.substring(icons_root.length + 1);
+                    if (seen.contains(rel)) {
+                        continue;
+                    }
+
+                    if (FileUtils.test(path, FileTest.IS_SYMLINK) && !materialize_theme_symlink(path)) {
+                        debug("Skipping unresolvable theme icon symlink %s", path);
+                        continue;
+                    }
+                    if (!FileUtils.test(path, FileTest.IS_REGULAR)) {
+                        continue;
+                    }
+
+                    seen.add(rel);
+                    results.add(rel);
+                }
+            } catch (Error e) {
+                debug("Failed to scan theme icons in %s: %s", dir_path, e.message);
+            }
+        }
+
+        /**
+         * Replace a symlinked theme icon with a copy of its target's content so the
+         * exported file is self-contained (its target may not be exported under that
+         * name). Only plain relative targets are followed; anything else is left out.
+         */
+        private static bool materialize_theme_symlink(string path) {
+            try {
+                var target = FileUtils.read_link(path);
+                if (target == null || target == "" || target.has_prefix("/") || target.contains("..")) {
+                    return false;
+                }
+                if (!FileUtils.test(path, FileTest.IS_REGULAR)) {
+                    return false;
+                }
+                uint8[] data;
+                GLib.FileUtils.get_data(path, out data);
+                File.new_for_path(path).delete(null);
+                GLib.FileUtils.set_data(path, data);
+                return true;
+            } catch (Error e) {
+                debug("Failed to materialize theme icon symlink %s: %s", path, e.message);
+                return false;
+            }
+        }
+
         public static string extract_icon(string appimage_path, string temp_root) throws Error {
             var icon_root = Path.build_filename(temp_root, "icon");
             DirUtils.create_with_parents(icon_root, 0755);

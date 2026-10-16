@@ -687,6 +687,154 @@ namespace AppManager.Core {
             return bundled_desktop_basename;
         }
 
+        /**
+         * Export the icon-theme files the app resolves by name (tray, notification, ...)
+         * from the AppImage into the user's hicolor theme.
+         *
+         * Flatpak automatically exports $FLATPAK_ID* icons to the host theme; an AppImage
+         * has no such mechanism, so names like Karere's SNI tray icon
+         * ("io.github.tobagin.karere-tray-symbolic") resolve to nothing and the panel
+         * shows a missing icon. Mirrors the Flatpak rule - only files named after the
+         * app id (or a dotted desktop Icon name) are exported, so a bundled generic icon
+         * can never shadow another app's theme entry. Paths are tracked on the record for
+         * clean uninstall; existing copies are refreshed in place on upgrade.
+         */
+        private void install_theme_icons(InstallationRecord record, string assets_path, string temp_root, string desktop_id_hint, string? desktop_icon_name) {
+            var prefixes = new Gee.ArrayList<string>();
+            var stem = desktop_id_hint;
+            if (stem.has_suffix(".desktop")) {
+                stem = stem.substring(0, stem.length - 8);
+            }
+            if (stem.strip() != "") {
+                prefixes.add(stem.strip());
+            }
+            // The desktop entry's own Icon name may differ from the root .desktop
+            // filename; when it is id-shaped (dotted) it is the other candidate prefix.
+            var icon_name = desktop_icon_name != null ? desktop_icon_name.strip() : "";
+            if (icon_name != "" && !icon_name.contains("/") && icon_name.contains(".")
+                && !prefixes.contains(icon_name)) {
+                prefixes.add(icon_name);
+            }
+            if (prefixes.size == 0) {
+                record.theme_icon_paths = null;
+                return;
+            }
+
+            string[] matches = AppImageAssets.extract_theme_icons(assets_path, temp_root, prefixes.to_array());
+            if (matches.length == 0) {
+                record.theme_icon_paths = null;
+                return;
+            }
+
+            var installed = new Gee.ArrayList<string>();
+            bool changed = false;
+            foreach (var rel in matches) {
+                var source = theme_icon_source(temp_root, rel);
+                if (source == null) {
+                    continue;
+                }
+                var dest = Path.build_filename(AppPaths.icons_dir, rel);
+                try {
+                    if (file_content_differs(source, dest)) {
+                        Utils.FileUtils.file_copy(source, dest);
+                        changed = true;
+                    }
+                    installed.add(dest);
+                } catch (Error e) {
+                    debug("Failed to export theme icon %s: %s", rel, e.message);
+                }
+            }
+
+            if (changed) {
+                update_hicolor_icon_cache();
+            }
+            record.theme_icon_paths = installed.size > 0 ? installed.to_array() : null;
+        }
+
+        /** Locate an extracted theme icon in either AppDir layout. */
+        private static string? theme_icon_source(string temp_root, string rel) {
+            foreach (var share_root in new string[] { "usr/share", "share" }) {
+                var path = Path.build_filename(temp_root, "theme_icons", share_root, "icons", rel);
+                if (GLib.FileUtils.test(path, FileTest.IS_REGULAR)) {
+                    return path;
+                }
+            }
+            return null;
+        }
+
+        /** Whether the destination is missing or holds different bytes than the source. */
+        private static bool file_content_differs(string source_path, string dest_path) throws Error {
+            if (!GLib.FileUtils.test(dest_path, FileTest.IS_REGULAR)) {
+                return true;
+            }
+            uint8[] source_data;
+            uint8[] dest_data;
+            GLib.FileUtils.get_data(source_path, out source_data);
+            GLib.FileUtils.get_data(dest_path, out dest_data);
+            if (source_data.length != dest_data.length) {
+                return true;
+            }
+            for (size_t i = 0; i < source_data.length; i++) {
+                if (source_data[i] != dest_data[i]) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /**
+         * Remove the icon-theme files this install exported. Paths another record still
+         * tracks are kept: side-by-side copies share these names (the app advertises them
+         * by name, so no copy suffix is possible), and unlinking one copy's export would
+         * blank the other's tray icon too.
+         */
+        private void remove_theme_icons(InstallationRecord record) {
+            var paths = record.theme_icon_paths;
+            record.theme_icon_paths = null;
+            if (paths == null || paths.length == 0) {
+                return;
+            }
+
+            var shared = new Gee.HashSet<string>();
+            foreach (var other in registry.list()) {
+                if (other.id == record.id) {
+                    continue;
+                }
+                foreach (var path in other.theme_icon_paths ?? new string[0]) {
+                    shared.add(path);
+                }
+            }
+
+            bool removed_any = false;
+            foreach (var path in paths) {
+                if (shared.contains(path)) {
+                    continue;
+                }
+                try {
+                    var f = File.new_for_path(path);
+                    if (f.query_exists()) {
+                        f.delete(null);
+                        removed_any = true;
+                    }
+                } catch (Error e) {
+                    debug("Failed to remove theme icon %s: %s", path, e.message);
+                }
+            }
+            if (removed_any) {
+                update_hicolor_icon_cache();
+            }
+        }
+
+        /** Refresh the hicolor cache after changing files under ~/.local/share/icons. */
+        private static void update_hicolor_icon_cache() {
+            try {
+                Process.spawn_command_line_async("gtk4-update-icon-cache -f -t " +
+                    Path.build_filename(AppPaths.icons_dir, "hicolor"));
+            } catch (Error e) {
+                debug("Icon cache update: %s", e.message);
+            }
+        }
+
         private void finalize_desktop_and_icon(InstallationRecord record, AppImageMetadata metadata, string exec_target, string appimage_for_assets, bool is_upgrade, string? app_run_path) throws Error {
             string exec_path = exec_target.dup();
             string assets_path = appimage_for_assets.dup();
@@ -870,6 +1018,13 @@ namespace AppManager.Core {
                 if (!is_self_install) {
                     Utils.FileUtils.file_copy(icon_path, stored_icon);
                 }
+
+                // Export the app's icon-theme files so host components can resolve icons
+                // by name (tray, notifications, ...) - the Flatpak-style export an AppImage
+                // does not get on its own.
+                if (!is_self_install) {
+                    install_theme_icons(record, assets_path, temp_dir, desktop_id_hint, original_icon_name);
+                }
                 
                 // Store original values temporarily in record for get_effective_* methods to work
                 record.original_icon_name = icon_name_for_desktop;
@@ -1052,6 +1207,10 @@ namespace AppManager.Core {
                     if (bin_symlink_is_ours(path, record.installed_path)) File.new_for_path(path).delete(null);
                 }
 
+                // Icon-theme files exported at install (names the app resolves at
+                // runtime: tray, notifications, ...)
+                remove_theme_icons(record);
+
                 // Remove AppImage portable folders (.home/.config) unless the caller is
                 // upgrading a portable install and wants to keep the user data.
                 // The sandboxed home holds the same kind of user data, so it follows
@@ -1110,6 +1269,7 @@ namespace AppManager.Core {
                 foreach (var path in record.extra_bin_symlinks ?? new string[0]) {
                     if (bin_symlink_is_ours(path, record.installed_path)) File.new_for_path(path).delete(null);
                 }
+                remove_theme_icons(record);
             } catch (Error e) {
                 warning("Failed to cleanup after installation error: %s", e.message);
             }
