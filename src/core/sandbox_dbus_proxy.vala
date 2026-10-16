@@ -252,9 +252,10 @@ namespace AppManager.Core {
          * The bus names a StatusNotifierItem tray icon can claim.
          *
          * Two tray flavours exist. The object-path one hands the watcher a path on a
-         * name the app already owns and so needs no rule of its own. The named one -
-         * what libappindicator uses, and therefore what Electron apps use - registers
-         * org.kde.StatusNotifierItem-<pid>-<n>, and the proxy's only wildcard is a
+         * name the app already owns and so needs no rule of its own. The named one
+         * registers org.kde.StatusNotifierItem-<pid>-<n> (libappindicator, Qt) or
+         * org.freedesktop.StatusNotifierItem-<pid>-<n> (Chromium, so Electron). Electron
+         * 43 drops its tray when that name is refused. The proxy's only wildcard is a
          * trailing ".*", which cannot match a name that varies before the last dot.
          *
          * "--own=org.kde.*" would match, but it would also let the app claim
@@ -268,6 +269,7 @@ namespace AppManager.Core {
             for (int pid = 2; pid <= SNI_MAX_PID; pid++) {
                 for (int item = 1; item <= SNI_MAX_ITEM; item++) {
                     rules.add("--own=org.kde.StatusNotifierItem-%d-%d".printf(pid, item));
+                    rules.add("--own=org.freedesktop.StatusNotifierItem-%d-%d".printf(pid, item));
                 }
             }
             return rules;
