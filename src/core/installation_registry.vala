@@ -404,7 +404,8 @@ namespace AppManager.Core {
                         debug("Cleaned up desktop file: %s", record.desktop_file);
                     }
                 }
-                
+                Installer.remove_autostart_entry(record);
+
                 // Clean up icon
                 if (record.icon_path != null) {
                     var icon_file = File.new_for_path(record.icon_path);

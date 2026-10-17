@@ -279,6 +279,10 @@ namespace AppManager.Core {
             if (record.desktop_file != null && File.new_for_path(record.desktop_file).query_exists()) {
                 update_desktop_file(record.desktop_file, old_path, new_path, old_base, new_base);
             }
+            var autostart_file = Installer.autostart_path(record);
+            if (autostart_file != null && File.new_for_path(autostart_file).query_exists()) {
+                update_desktop_file(autostart_file, old_path, new_path, old_base, new_base);
+            }
 
             // The manifest holds the AppImage and sandboxed-home paths, so it has to be
             // regenerated rather than path-replaced.

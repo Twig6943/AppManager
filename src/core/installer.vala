@@ -479,6 +479,9 @@ namespace AppManager.Core {
                 record.custom_no_display = old_record.custom_no_display;
                 record.custom_add_to_path = old_record.custom_add_to_path;
                 record.custom_env_vars = old_record.custom_env_vars;
+                record.autostart_enabled = old_record.autostart_enabled;
+                record.custom_autostart_args = old_record.custom_autostart_args;
+                record.custom_autostart_delay = old_record.custom_autostart_delay;
                 record.prerelease_enabled = old_record.prerelease_enabled;
                 record.copy_sandbox_from(old_record);
                 // First catalog recognition must not replace existing non-store
@@ -1108,6 +1111,7 @@ namespace AppManager.Core {
                 if (!GLib.FileUtils.set_contents(desktop_destination, desktop_contents)) {
                     throw new InstallerError.UNKNOWN("Unable to write desktop file");
                 }
+                write_autostart_entry(record, exec_path);
                 // For self-install, use hicolor path; otherwise use flat icons directory
                 record.icon_path = is_self_install ? AppPaths.main_icon_path : stored_icon;
                 
@@ -1189,6 +1193,7 @@ namespace AppManager.Core {
                 if (record.icon_path != null && File.new_for_path(record.icon_path).query_exists()) {
                     File.new_for_path(record.icon_path).delete(null);
                 }
+                remove_autostart_entry(record);
                 // Only unlink what we created
                 if (record.bin_symlink != null && bin_launcher_is_ours(record.bin_symlink, record)) {
                     File.new_for_path(record.bin_symlink).delete(null);
@@ -1391,6 +1396,18 @@ namespace AppManager.Core {
             return kept.str;
         }
 
+        // The primary Exec line. Shared with the autostart entry so a login start matches
+        // a menu start (env vars, sandbox launcher, args).
+        private string build_exec_line(InstallationRecord record, string exec_target, string args) {
+            var env_vars = record.get_effective_env_vars();
+            var env_prefix = record.sandbox_enabled() ? "" : build_env_prefix(env_vars);
+            var launcher = launch_tokens(record, exec_target, env_vars);
+            if (args.strip() != "") {
+                return "%s%s %s".printf(env_prefix, launcher, args);
+            }
+            return "%s%s".printf(env_prefix, launcher);
+        }
+
         private string rewrite_desktop(string desktop_path, string exec_target, InstallationRecord record, bool is_terminal, string slug, bool is_upgrade, string? effective_icon_name, string? effective_keywords, string? effective_startup_wm_class, string? effective_commandline_args, string? effective_update_link, string? effective_web_page, string? effective_name = null) throws Error {
             var entry = new DesktopEntry(desktop_path);
 
@@ -1401,18 +1418,7 @@ namespace AppManager.Core {
             }
 
             // Update Exec with optional environment variables
-            var args = effective_commandline_args ?? "";
-            var env_vars = record.get_effective_env_vars();
-            var env_prefix = record.sandbox_enabled() ? "" : build_env_prefix(env_vars);
-            var launcher = launch_tokens(record, exec_target, env_vars);
-
-            string exec_line;
-            if (args.strip() != "") {
-                exec_line = "%s%s %s".printf(env_prefix, launcher, args);
-            } else {
-                exec_line = "%s%s".printf(env_prefix, launcher);
-            }
-            entry.exec = exec_line;
+            entry.exec = build_exec_line(record, exec_target, effective_commandline_args ?? "");
 
             // Action Exec lines: same shape as main Exec, but each action keeps its own
             // intrinsic args (--new-window, --screenshot, ...) instead of effective_commandline_args.
@@ -2274,8 +2280,91 @@ namespace AppManager.Core {
                 warning("Failed to rewrite desktop file %s: %s", desktop_path, e.message);
             }
 
+            write_autostart_entry(record, exec_target);
             apply_record_customizations_to_sub_desktops(record);
             refresh_bin_launcher_for_record(record, exec_target);
+        }
+
+        private const string AUTOSTART_MARKER = "X-AppManager-Autostart";
+        // Meaningless at login; systemd's autostart generator drops them too.
+        private const string[] EXEC_FIELD_CODES = { "%f", "%F", "%u", "%U", "%d", "%D", "%n", "%N", "%i", "%c", "%k", "%v", "%m" };
+
+        /**
+         * Own prefix instead of the app's desktop file name: apps like Bitwarden write
+         * ~/.config/autostart/<name>.desktop pointing at their temporary mount, and
+         * rewrite or delete it at runtime.
+         */
+        public static string? autostart_path(InstallationRecord record) {
+            if (record.desktop_file == null || record.desktop_file.strip() == "") {
+                return null;
+            }
+            return Path.build_filename(Environment.get_user_config_dir(), "autostart",
+                "appmanager-" + Path.get_basename(record.desktop_file));
+        }
+
+        public void sync_autostart_entry(InstallationRecord record) {
+            write_autostart_entry(record, resolve_exec_path_for_record(record));
+        }
+
+        // Writes or removes the entry to match record.autostart_enabled.
+        private void write_autostart_entry(InstallationRecord record, string exec_target) {
+            var path = autostart_path(record);
+            if (path == null) {
+                return;
+            }
+            // AppManager's own daemon has a separate autostart entry.
+            if (!record.autostart_enabled || record.is_self_app()) {
+                remove_autostart_entry(record);
+                return;
+            }
+
+            var args = new StringBuilder();
+            var extra = (record.custom_autostart_args ?? "").strip();
+            foreach (var tok in ((record.get_effective_commandline_args() ?? "") + " " + extra).split(" ")) {
+                var t = tok.strip();
+                if (t == "" || t in EXEC_FIELD_CODES) continue;
+                if (args.len > 0) args.append(" ");
+                args.append(t);
+            }
+            var exec = build_exec_line(record, exec_target, args.str);
+            if (record.custom_autostart_delay > 0) {
+                // X-GNOME-Autostart-Delay is an Ubuntu patch that systemd's generator ignores.
+                var script = "sleep %d; exec \"$@\"".printf(record.custom_autostart_delay);
+                exec = "/bin/sh -c \"%s\" sh %s".printf(escape_env_exec_token(script), exec);
+            }
+
+            var keyfile = new KeyFile();
+            var group = KeyFileDesktop.GROUP;
+            keyfile.set_string(group, "Type", "Application");
+            keyfile.set_string(group, "Name", record.get_effective_name());
+            var icon = record.get_effective_icon_name();
+            if (icon != null && icon.strip() != "") {
+                keyfile.set_string(group, "Icon", icon);
+            }
+            keyfile.set_string(group, "Exec", exec);
+            keyfile.set_boolean(group, AUTOSTART_MARKER, true);
+            try {
+                DirUtils.create_with_parents(Path.get_dirname(path), 0755);
+                GLib.FileUtils.set_contents(path, keyfile.to_data());
+            } catch (Error e) {
+                warning("Failed to write autostart entry %s: %s", path, e.message);
+            }
+        }
+
+        public static void remove_autostart_entry(InstallationRecord record) {
+            var path = autostart_path(record);
+            if (path == null || !GLib.FileUtils.test(path, FileTest.EXISTS)) {
+                return;
+            }
+            try {
+                var keyfile = new KeyFile();
+                keyfile.load_from_file(path, KeyFileFlags.NONE);
+                if (keyfile.has_key(KeyFileDesktop.GROUP, AUTOSTART_MARKER)) {
+                    File.new_for_path(path).delete();
+                }
+            } catch (Error e) {
+                warning("Failed to remove autostart entry %s: %s", path, e.message);
+            }
         }
 
         /**

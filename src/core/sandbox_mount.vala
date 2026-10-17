@@ -84,6 +84,10 @@ namespace AppManager.Core {
             int guard = open_guard(self.guard_path, true);
             if (guard < 0) return null;
             cleanup_stale_generations(record_root, self.root);
+            // Left alone, a dead mount fails this and every later launch until reboot.
+            if (is_dead_mount(self.mount_dir)) {
+                unmount(self.mount_dir);
+            }
             bool ok = DirUtils.create_with_parents(self.mount_dir, 0700) == 0;
             if (ok) {
                 self.ref_fd = Posix.open(Path.build_filename(self.root, "holders"),
@@ -196,9 +200,16 @@ namespace AppManager.Core {
             Posix.Stat inner = Posix.Stat();
             Posix.Stat outer = Posix.Stat();
             if (Posix.stat(mount_dir, out inner) != 0 || Posix.stat(parent, out outer) != 0) {
-                return false;
+                return is_dead_mount(mount_dir);
             }
             return inner.st_dev != outer.st_dev;
+        }
+
+        // A FUSE daemon killed without unmounting (logout stops the whole app scope)
+        // leaves a mount point whose stat fails with ENOTCONN.
+        private static bool is_dead_mount(string mount_dir) {
+            Posix.Stat st = Posix.Stat();
+            return Posix.stat(mount_dir, out st) != 0 && Posix.errno == Posix.ENOTCONN;
         }
 
         private static bool mount_payload(string driver, AppImageFormat format,
