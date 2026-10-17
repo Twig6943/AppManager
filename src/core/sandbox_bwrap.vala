@@ -563,11 +563,15 @@ x-scheme-handler/https=app-manager-open-uri.desktop
                 setenv("GIO_USE_VFS", "local");
             }
 
-            // libadwaita reads the color scheme and accent color only from the Settings
-            // portal, which the filtered bus hides, unless told to fall back to GSettings
-            // (the ro-bound dconf). Read at startup only: dconf change notifications do
-            // not reach the sandbox.
+            // dconf refuses writes behind the filtered bus; see SandboxSettings.
             if (!manifest.full_session_bus) {
+                setenv("GSETTINGS_BACKEND", "keyfile");
+                SandboxSettings.seed(manifest.home);
+            }
+
+            // libadwaita takes the color scheme from GSettings only with this set. With
+            // a session proxy it uses the Settings portal instead, which follows changes.
+            if (!manifest.full_session_bus && !manifest.needs_session_bus()) {
                 setenv("ADW_DISABLE_PORTAL", "1");
             }
 

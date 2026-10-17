@@ -285,7 +285,23 @@ namespace AppManager.Core {
             if (manifest.screenshots) {
                 rules.add_all(screenshot_rules());
             }
+            rules.add_all(settings_portal_rules());
 
+            return rules;
+        }
+
+        /**
+         * The Settings portal alone, for every app: apps following Granite's pattern
+         * (Planify) read the color scheme only here, and libadwaita gets live changes
+         * through it. It exposes nothing the ro-bound dconf does not. As with
+         * screenshot_rules, properties stay refused.
+         */
+        public static Gee.ArrayList<string> settings_portal_rules() {
+            var rules = new Gee.ArrayList<string>();
+            const string service = "org.freedesktop.portal.Desktop";
+            const string path = "/org/freedesktop/portal/desktop";
+            rules.add("--call=%s=org.freedesktop.portal.Settings.*@%s".printf(service, path));
+            rules.add("--broadcast=%s=org.freedesktop.portal.Settings.SettingChanged@%s".printf(service, path));
             return rules;
         }
 

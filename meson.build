@@ -1,5 +1,5 @@
 project('app-manager', ['vala', 'c'],
-  version: '4.0.0-beta2',
+  version: '4.0.0-beta3',
   meson_version: '>=0.64.0'
 )
 
@@ -119,6 +119,7 @@ core_sources = files(
   'src/core/sandbox_mount.vala',
   'src/core/sandbox_bwrap.vala',
   'src/core/sandbox_dbus_proxy.vala',
+  'src/core/sandbox_settings.vala',
   'src/core/sandbox_wayland.vala',
   'src/core/sandbox_launcher.vala',
   'src/core/update_sources.vala',
