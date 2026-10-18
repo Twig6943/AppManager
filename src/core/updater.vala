@@ -585,8 +585,10 @@ namespace AppManager.Core {
 
             try {
                 pool = new ThreadPool<RecordTask>.with_owned_data((task) => {
+                    var probe = probe_record(task.record, cancellable);
+
                     slots_lock.lock();
-                    slots[task.index] = probe_record(task.record, cancellable);
+                    slots[task.index] = probe;
                     slots_lock.unlock();
                 }, MAX_PARALLEL_JOBS, false);
 
