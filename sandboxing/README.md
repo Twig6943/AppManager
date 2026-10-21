@@ -114,6 +114,14 @@ installs** are supported; extracted apps cannot currently be sandboxed.
 - **Location uses AppManager's switch.** Your desktop may not prompt or list the
   app separately because requests pass through AppManager's proxy. Use its
   Location switch to control that app; the desktop's global switch still applies.
+- **Browser extension pairing.** Apps that pair with a browser extension, such as
+  Bitwarden's browser unlock, register in the browser's native-messaging folder,
+  which the separate home folder hides. Grant `~/.mozilla/native-messaging-hosts`
+  (Firefox) or `~/.config/<browser>/NativeMessagingHosts` (Chromium-based) under
+  **Special permissions**, then restart the app and the browser. Press Ctrl+H in
+  the folder picker to show hidden folders. This lets the app install a helper
+  that your browser runs outside the sandbox. Apps that keep their connection
+  socket elsewhere may still fail.
 - **Some apps need compatibility adjustments.** Detected Chromium/Electron apps
   run with their internal sandbox disabled because it conflicts with this one;
   AppManager's outer sandbox remains active. Custom themes importing files from
