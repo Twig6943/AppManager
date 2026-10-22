@@ -17,6 +17,7 @@ namespace AppManager {
         private Adw.ActionRow? thumbnailer_row = null;
         private Adw.PreferencesGroup? global_dirs_group = null;
         private Gee.ArrayList<Adw.ActionRow> global_dir_rows = new Gee.ArrayList<Adw.ActionRow>();
+        private Adw.ActionRow? global_add_row = null;
         private const string GTK_CONFIG_SUBDIR = "gtk-4.0";
         private const string APP_CSS_FILENAME = "AppManager.css";
         private const string APP_CSS_IMPORT_LINE = "@import url(\"AppManager.css\");";
@@ -427,15 +428,22 @@ namespace AppManager {
             global_dir_rows.clear();
             global_dirs_group = new Adw.PreferencesGroup();
             global_dirs_group.title = _("Global folder access");
-            global_dirs_group.description = _("Folders every sandboxed app may read and write, in addition to its own permissions. A symlink only works if you also add the folder it points at.");
+            global_dirs_group.description = _("Folders shared with every sandboxed app, in addition to its own permissions. Choose read-only or read and write access. A symlink only works if you also add the folder it points at.");
             global_dirs_group.sensitive = AppPaths.sandbox_available;
 
-            var add_folder_button = new Gtk.Button.from_icon_name("list-add-symbolic");
-            add_folder_button.valign = Gtk.Align.CENTER;
-            add_folder_button.tooltip_text = _("Add folder");
+            var add_folder_button = new Gtk.Button();
+            add_folder_button.child = new Adw.ButtonContent() {
+                icon_name = "list-add-symbolic",
+                label = _("Add folder")
+            };
             add_folder_button.add_css_class("flat");
+            add_folder_button.halign = Gtk.Align.CENTER;
+            add_folder_button.margin_top = 8;
+            add_folder_button.margin_bottom = 8;
             add_folder_button.clicked.connect(on_add_global_dir);
-            global_dirs_group.header_suffix = add_folder_button;
+            global_add_row = new Adw.ActionRow();
+            global_add_row.activatable = false;
+            global_add_row.child = add_folder_button;
 
             page.add(global_dirs_group);
             reload_global_dir_rows();
@@ -506,13 +514,20 @@ namespace AppManager {
                 global_dirs_group.remove(row);
             }
             global_dir_rows.clear();
+            // Re-appended below so it stays last.
+            if (global_add_row.get_parent() != null) {
+                global_dirs_group.remove(global_add_row);
+            }
 
             foreach (var entry in SandboxConfig.global_extra_dirs()) {
                 var path = SandboxConfig.strip_access_suffix(entry);
-                var row = new Adw.ActionRow();
+                var row = new Adw.ComboRow();
                 row.title = Path.get_basename(path);
                 row.subtitle = path;
                 row.add_prefix(new Gtk.Image.from_icon_name("folder-symbolic"));
+                row.model = new Gtk.StringList({ _("Read-only"), _("Read and write") });
+                row.selected = entry.strip().has_suffix(":rw") ? 1 : 0;
+                row.notify["selected"].connect(() => set_global_dir_access(path, row.selected == 1));
 
                 var remove_button = new Gtk.Button.from_icon_name("user-trash-symbolic");
                 remove_button.valign = Gtk.Align.CENTER;
@@ -524,9 +539,10 @@ namespace AppManager {
                 global_dirs_group.add(row);
                 global_dir_rows.add(row);
             }
+            global_dirs_group.add(global_add_row);
         }
 
-        private void store_global_dirs(Gee.List<string> entries) {
+        private void store_global_dirs(Gee.List<string> entries, bool reload_rows = true) {
             // set_strv reads until a NULL, but Gee's to_array only counts elements, and
             // valac drops the length - so the setter runs off the end and segfaults.
             // One extra slot, zero-initialised, is the terminator.
@@ -540,7 +556,23 @@ namespace AppManager {
             if (registry != null && SandboxConfig.refresh_all(registry.list())) {
                 registry.persist(false);
             }
-            reload_global_dir_rows();
+            if (reload_rows) {
+                reload_global_dir_rows();
+            }
+        }
+
+        private void set_global_dir_access(string path, bool writable) {
+            var dirs = new Gee.ArrayList<string>();
+            foreach (var entry in SandboxConfig.global_extra_dirs()) {
+                if (SandboxConfig.strip_access_suffix(entry) != path) {
+                    dirs.add(entry);
+                } else {
+                    dirs.add(writable ? "%s:rw".printf(path) : path);
+                }
+            }
+            // The row that changed already shows the new access; rebuilding the list
+            // from its own notify handler would destroy it mid-emission.
+            store_global_dirs(dirs, false);
         }
 
         private void remove_global_dir(string path) {

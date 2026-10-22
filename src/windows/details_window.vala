@@ -911,6 +911,23 @@ namespace AppManager {
             folders_group.title = _("Folders");
             folders_group.description = _("Folders shared with the app. Choose read-only or read and write access. Other folders stay hidden, including anything you pick in a file dialog inside the app.");
 
+            // The "manual override" of issue #37, as a list rather than a single slot:
+            // anything outside the XDG set the app still needs - including the real target
+            // of a symlink, which a bind of the link alone leaves dangling.
+            var add_folder_button = new Gtk.Button();
+            add_folder_button.child = new Adw.ButtonContent() {
+                icon_name = "list-add-symbolic",
+                label = _("Add folder")
+            };
+            add_folder_button.add_css_class("flat");
+            add_folder_button.halign = Gtk.Align.CENTER;
+            add_folder_button.margin_top = 8;
+            add_folder_button.margin_bottom = 8;
+            var add_folder_row = new Adw.ActionRow();
+            add_folder_row.activatable = false;
+            add_folder_row.child = add_folder_button;
+            var extra_rows = new Gee.ArrayList<Adw.ComboRow>();
+
             var downloads_row = build_folder_permission_row(
                 _("Downloads"), "folder-download-symbolic", "downloads");
             folders_group.add(downloads_row);
@@ -929,6 +946,7 @@ namespace AppManager {
             var music_row = build_folder_permission_row(
                 _("Music"), "folder-music-symbolic", "music");
             folders_group.add(music_row);
+            folders_group.add(add_folder_row);
 
             prefs_page.add(folders_group);
 
@@ -993,22 +1011,6 @@ namespace AppManager {
             sync_imported_permissions();
             prefs_page.add(imported_group);
 
-            // The "manual override" of issue #37, as a list rather than a single slot:
-            // anything outside the XDG set the app still needs - including the real target
-            // of a symlink, which a bind of the link alone leaves dangling.
-            var extra_group = new Adw.PreferencesGroup();
-            extra_group.title = _("Special permissions");
-            extra_group.description = _("Additional folders this app may read and write. A symlink only works if you also add the folder it points at.");
-
-            var add_folder_button = new Gtk.Button.from_icon_name("list-add-symbolic");
-            add_folder_button.valign = Gtk.Align.CENTER;
-            add_folder_button.tooltip_text = _("Add folder");
-            add_folder_button.add_css_class("flat");
-            extra_group.header_suffix = add_folder_button;
-
-            var extra_rows = new Gee.ArrayList<Adw.ActionRow>();
-            prefs_page.add(extra_group);
-
             // Folders Preferences grants to every sandboxed app. Listed here so this
             // page shows everything the app can reach, but only editable there.
             var global_dirs = Core.SandboxConfig.global_extra_dirs();
@@ -1021,6 +1023,9 @@ namespace AppManager {
                 global_row.title = Path.get_basename(global_path);
                 global_row.subtitle = global_path;
                 global_row.add_prefix(new Gtk.Image.from_icon_name("folder-symbolic"));
+                var access_label = new Gtk.Label(entry.strip().has_suffix(":rw") ? _("Read and write") : _("Read-only"));
+                access_label.add_css_class("dim-label");
+                global_row.add_suffix(access_label);
                 global_group.add(global_row);
             }
             prefs_page.add(global_group);
@@ -1092,7 +1097,6 @@ namespace AppManager {
                     || (record.sandbox_session_rules != null && record.sandbox_session_rules.length > 0)
                     || (record.sandbox_system_rules != null && record.sandbox_system_rules.length > 0)
                     || (record.sandbox_extra_devices != null && record.sandbox_extra_devices.length > 0));
-                extra_group.visible = show_permissions;
                 global_group.visible = show_permissions && global_dirs.length > 0;
 
                 // Greyed rather than hidden while sandboxed, so the description can say
@@ -1122,11 +1126,28 @@ namespace AppManager {
             // Extra-folder rows are added and removed one at a time rather than rebuilt
             // wholesale: a rebuild would have to be callable from the row handlers it
             // creates, introducing a cycle between the callbacks.
-            StringUpdateFunc add_extra_row = (path) => {
-                var row = new Adw.ActionRow();
+            StringUpdateFunc add_extra_row = (grant) => {
+                var path = Core.SandboxConfig.strip_access_suffix(grant);
+                var row = new Adw.ComboRow();
                 row.title = Path.get_basename(path);
                 row.subtitle = path;
                 row.add_prefix(new Gtk.Image.from_icon_name("folder-symbolic"));
+                row.model = new Gtk.StringList({ _("Read-only"), _("Read and write") });
+                row.selected = grant.strip().has_suffix(":rw") ? 1 : 0;
+                row.notify["selected"].connect(() => {
+                    var dirs = new Gee.ArrayList<string>();
+                    foreach (var existing in record.sandbox_extra_dirs ?? new string[0]) {
+                        if (Core.SandboxConfig.strip_access_suffix(existing) != path) {
+                            dirs.add(existing);
+                        } else {
+                            dirs.add(row.selected == 1 ? "%s:rw".printf(path) : path);
+                        }
+                    }
+                    record.sandbox_extra_dirs = dirs.to_array();
+                    relabel_profile();
+                    sync_profile_row();
+                    commit(false);
+                });
 
                 var remove_button = new Gtk.Button.from_icon_name("user-trash-symbolic");
                 remove_button.valign = Gtk.Align.CENTER;
@@ -1141,7 +1162,7 @@ namespace AppManager {
                     }
                     record.sandbox_extra_dirs = kept.size > 0 ? kept.to_array() : null;
 
-                    extra_group.remove(row);
+                    folders_group.remove(row);
                     extra_rows.remove(row);
                     relabel_profile();
                     sync_profile_row();
@@ -1149,7 +1170,10 @@ namespace AppManager {
                 });
                 row.add_suffix(remove_button);
 
-                extra_group.add(row);
+                // Re-append the add row so it stays last.
+                folders_group.remove(add_folder_row);
+                folders_group.add(row);
+                folders_group.add(add_folder_row);
                 extra_rows.add(row);
             };
 
@@ -1164,7 +1188,7 @@ namespace AppManager {
                 }
                 dirs.add("%s:rw".printf(path));
                 record.sandbox_extra_dirs = dirs.to_array();
-                add_extra_row(path);
+                add_extra_row("%s:rw".printf(path));
                 relabel_profile();
                 sync_profile_row();
                 commit(false);
@@ -1210,7 +1234,7 @@ namespace AppManager {
             sync_profile_row();
             sync_portable_rows();
             foreach (var entry in record.sandbox_extra_dirs ?? new string[0]) {
-                add_extra_row(Core.SandboxConfig.strip_access_suffix(entry));
+                add_extra_row(entry);
             }
             update_sensitivity();
 

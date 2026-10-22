@@ -15,7 +15,7 @@ Open an app's details, then **Privacy & Security**, and choose a profile:
 - **Custom** appears when your changes no longer match a preset or saved AppHub
   template.
 - **AppHub**, when available, restores the app's downloaded store template without
-  an internet connection. Your Special permissions folders stay granted.
+  an internet connection. Folders you added stay granted.
 - **Off** runs the app without AppManager's sandbox.
 
 Accessibility is on by default and has its own switch; an AppHub template can
@@ -23,15 +23,16 @@ turn it off. Media controls and tray integration are automatic unless the templa
 disables them. Host themes, icons, fonts and desktop settings are shared read-only
 so sandboxed apps keep your desktop appearance.
 
-Folder selectors offer **Off**, **Read-only**, or **Read and write**. Use
-**Special permissions** to add other folders; these grants currently allow writes.
+Folder selectors offer **Off**, **Read-only**, or **Read and write**. Use **Add
+folder** at the bottom of **Folders** to add other folders, then choose their
+access.
 The Display selector lets you choose Wayland, X11, prefer Wayland with an X11
 fallback, or neither. A small shield beside an app's icon indicates sandboxing is
 enabled.
 
 To enable sandboxing for new non-store apps or grant a folder to all sandboxed
-apps, open **Preferences → Security & Privacy**. Global folder grants and Special
-permissions supplement every profile, including Strict.
+apps, open **Preferences → Security & Privacy**. Global folder grants and folders
+you added supplement every profile, including Strict.
 
 ## Always-shared appearance files
 
@@ -69,7 +70,7 @@ disabled. The Standard-default preference applies to apps outside AppHub.
 Your changes, including turning sandboxing off, survive restarts and updates.
 Existing installed-app settings take precedence when an app is first recognized
 as an AppHub download. Selecting **AppHub** restores the saved template. After
-uninstalling and reinstalling, only Special permissions folders are restored;
+uninstalling and reinstalling, only folders you added are restored;
 the app otherwise receives its current template or normal installation defaults.
 
 Failed catalog checks stop a web installation rather than silently choosing
@@ -117,11 +118,11 @@ installs** are supported; extracted apps cannot currently be sandboxed.
 - **Browser extension pairing.** Apps that pair with a browser extension, such as
   Bitwarden's browser unlock, register in the browser's native-messaging folder,
   which the separate home folder hides. Grant `~/.mozilla/native-messaging-hosts`
-  (Firefox) or `~/.config/<browser>/NativeMessagingHosts` (Chromium-based) under
-  **Special permissions**, then restart the app and the browser. Press Ctrl+H in
-  the folder picker to show hidden folders. This lets the app install a helper
-  that your browser runs outside the sandbox. Apps that keep their connection
-  socket elsewhere may still fail.
+  (Firefox) or `~/.config/<browser>/NativeMessagingHosts` (Chromium-based) with
+  **Read and write** under **Folders**, then restart the app and the browser.
+  Press Ctrl+H in the folder picker to show hidden folders. This lets the app
+  install a helper that your browser runs outside the sandbox. Apps that keep
+  their connection socket elsewhere may still fail.
 - **Some apps need compatibility adjustments.** Detected Chromium/Electron apps
   run with their internal sandbox disabled because it conflicts with this one;
   AppManager's outer sandbox remains active. Custom themes importing files from
