@@ -11,6 +11,7 @@
 , gtk4
 , libadwaita
 , glib
+, glib-networking
 , json-glib
 , libgee
 , libsoup_3
@@ -53,6 +54,7 @@ stdenv.mkDerivation(finalAttrs: {
     gtk4
     libadwaita
     glib
+    glib-networking
     json-glib
     libgee
     libsoup_3
