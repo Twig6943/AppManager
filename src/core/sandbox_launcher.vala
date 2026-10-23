@@ -170,7 +170,11 @@ namespace AppManager.Core {
                 builder.session_bus_socket = proxy.session_socket;
                 builder.system_bus_socket = proxy.system_socket;
                 builder.a11y_bus_socket = proxy.a11y_socket;
-                builder.sync_fd = proxy.sync_read_fd;
+                // Deferred: --sync-fd makes bwrap fork a holder after --block-fd, so its
+                // child-pid is not the app's pid. This process holds the pipe instead.
+                if (!deferred) {
+                    builder.sync_fd = proxy.sync_read_fd;
+                }
                 builder.bus_socket_dir = proxy.socket_dir;
             }
             deferred = proxy != null && deferred;
@@ -226,7 +230,7 @@ namespace AppManager.Core {
                     close_fd(ref block[0]);
                     released = pid > 0 && release_with_proxy(proxy, pid, info[0], block[1]);
                 }
-                if (proxy != null) {
+                if (proxy != null && !deferred) {
                     proxy.detach_sync_fd();
                 }
                 status = (pid > 0) ? wait_for(pid) : 3;
