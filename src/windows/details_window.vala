@@ -887,6 +887,12 @@ namespace AppManager {
             service_rows.set("network-information", network_info_row);
             services_group.add(network_info_row);
 
+            var online_accounts_row = build_permission_row(
+                _("Online accounts"), _("Use GNOME Online Accounts and Evolution Data Server to read and change mail, calendar and contact data. The app can reach every configured account, so grant it only to apps you trust."),
+                "system-users-symbolic", Core.SandboxConfig.service_enabled(record, "online-accounts"));
+            service_rows.set("online-accounts", online_accounts_row);
+            services_group.add(online_accounts_row);
+
             var keyring_row = build_permission_row(
                 _("Keyring"), _("Save logins in GNOME Keyring or KWallet. The app can also read every password stored there, so grant it only to apps you trust."),
                 "dialog-password-symbolic", Core.SandboxConfig.service_enabled(record, "keyring"));

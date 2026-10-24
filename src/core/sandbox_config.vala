@@ -55,6 +55,7 @@ namespace AppManager.Core {
             record.sandbox_allow_location = false;
             record.sandbox_allow_network_info = false;
             record.sandbox_allow_keyring = false;
+            record.sandbox_allow_online_accounts = false;
             record.sandbox_allow_polkit = false;
             record.sandbox_allow_screenshots = false;
 
@@ -131,14 +132,16 @@ namespace AppManager.Core {
                     record.sandbox_allow_gpu, record.sandbox_allow_camera, record.sandbox_allow_input, record.sandbox_allow_dbus,
                     record.sandbox_allow_notifications, record.sandbox_allow_tray, record.sandbox_allow_media_controls,
                     record.sandbox_allow_accessibility, record.sandbox_allow_network_info, record.sandbox_allow_bluetooth,
-                    record.sandbox_allow_location, record.sandbox_allow_keyring, record.sandbox_allow_polkit,
-                    record.sandbox_allow_screenshots, record.sandbox_share_processes, record.sandbox_share_ipc };
+                    record.sandbox_allow_location, record.sandbox_allow_keyring, record.sandbox_allow_online_accounts,
+                    record.sandbox_allow_polkit, record.sandbox_allow_screenshots, record.sandbox_share_processes,
+                    record.sandbox_share_ipc };
                 bool[] wanted_flags = { expected.sandbox_allow_network, expected.sandbox_allow_audio, expected.sandbox_allow_x11,
                     expected.sandbox_allow_gpu, expected.sandbox_allow_camera, expected.sandbox_allow_input, expected.sandbox_allow_dbus,
                     expected.sandbox_allow_notifications, expected.sandbox_allow_tray, expected.sandbox_allow_media_controls,
                     expected.sandbox_allow_accessibility, expected.sandbox_allow_network_info, expected.sandbox_allow_bluetooth,
-                    expected.sandbox_allow_location, expected.sandbox_allow_keyring, expected.sandbox_allow_polkit,
-                    expected.sandbox_allow_screenshots, expected.sandbox_share_processes, expected.sandbox_share_ipc };
+                    expected.sandbox_allow_location, expected.sandbox_allow_keyring, expected.sandbox_allow_online_accounts,
+                    expected.sandbox_allow_polkit, expected.sandbox_allow_screenshots, expected.sandbox_share_processes,
+                    expected.sandbox_share_ipc };
                 for (int i = 0; i < actual_flags.length; i++) if (actual_flags[i] != wanted_flags[i]) return false;
                 foreach (var location in new string[] { "downloads", "documents", "desktop", "pictures", "videos", "music" }) {
                     if (folder_access(record, location) != folder_access(expected, location)) return false;
@@ -170,6 +173,7 @@ namespace AppManager.Core {
                 && !r.sandbox_allow_location
                 && !r.sandbox_allow_network_info
                 && !r.sandbox_allow_keyring
+                && !r.sandbox_allow_online_accounts
                 && !r.sandbox_allow_polkit
                 && !r.sandbox_allow_screenshots
                 && !r.sandbox_allow_documents
@@ -238,7 +242,7 @@ namespace AppManager.Core {
 
         public static bool service_has_full_bus(InstallationRecord r, string service) {
             if (service in new string[] { "bluetooth", "location", "network-information" }) return r.sandbox_system_bus == "full";
-            return r.sandbox_allow_dbus && service in new string[] { "notifications", "system-tray", "media-controls", "keyring", "screenshots" };
+            return r.sandbox_allow_dbus && service in new string[] { "notifications", "system-tray", "media-controls", "keyring", "online-accounts", "screenshots" };
         }
 
         public static bool service_enabled(InstallationRecord r, string service) {
@@ -259,6 +263,7 @@ namespace AppManager.Core {
                 case "location": enabled = r.sandbox_allow_location; break;
                 case "network-information": enabled = r.sandbox_allow_network_info; break;
                 case "keyring": enabled = r.sandbox_allow_keyring; break;
+                case "online-accounts": enabled = r.sandbox_allow_online_accounts; break;
             }
             if (enabled) return true;
             bool system_service = service in new string[] { "bluetooth", "location", "network-information" };
@@ -281,6 +286,9 @@ namespace AppManager.Core {
                 case "location": return name == "org.freedesktop.GeoClue2";
                 case "network-information": return name == "org.freedesktop.NetworkManager";
                 case "keyring": return name in SandboxDbusProxy.KEYRING_NAMES;
+                case "online-accounts":
+                    return name in SandboxDbusProxy.ONLINE_ACCOUNTS_NAMES
+                        || name.has_prefix(SandboxDbusProxy.EVOLUTION_DATASERVER_NAMESPACE + ".");
             }
             return false;
         }
@@ -302,6 +310,7 @@ namespace AppManager.Core {
                 case "location": r.sandbox_allow_location = allowed; break;
                 case "network-information": r.sandbox_allow_network_info = allowed; break;
                 case "keyring": r.sandbox_allow_keyring = allowed; break;
+                case "online-accounts": r.sandbox_allow_online_accounts = allowed; break;
                 case "system-authentication": r.sandbox_allow_polkit = allowed; break;
                 case "screenshots": r.sandbox_allow_screenshots = allowed; break;
             }

@@ -575,6 +575,13 @@ x-scheme-handler/https=app-manager-open-uri.desktop
                 setenv("ADW_DISABLE_PORTAL", "1");
             }
 
+            // WebKitGTK sandboxes its network, web and GPU processes with bwrap, which
+            // cannot create a nested user namespace inside this sandbox. Without this
+            // it aborts as soon as a page needs the network process. Its helpers then
+            // run unsandboxed within this sandbox, as Chromium's renderers do. The
+            // variable is ignored by non-WebKit apps.
+            setenv("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1");
+
             foreach (var name in new string[] {
                 "USER", "LOGNAME", "LANG", "LANGUAGE", "TERM", "COLORTERM",
                 "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP"

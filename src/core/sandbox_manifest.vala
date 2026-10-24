@@ -49,6 +49,7 @@ namespace AppManager.Core {
         public bool location = false;
         public bool network_info = false;
         public bool keyring = false;
+        public bool online_accounts = false;
         public bool polkit = false;
         public bool screenshots = false;
         public bool full_session_bus = false;
@@ -97,6 +98,7 @@ namespace AppManager.Core {
             m.location = record.sandbox_allow_location;
             m.network_info = record.sandbox_allow_network_info;
             m.keyring = record.sandbox_allow_keyring;
+            m.online_accounts = record.sandbox_allow_online_accounts;
             m.polkit = record.sandbox_allow_polkit;
             m.screenshots = record.sandbox_allow_screenshots;
             m.full_session_bus = record.sandbox_allow_dbus;
@@ -161,7 +163,8 @@ namespace AppManager.Core {
             // no service is declared. Its absence is what made some apps crash once a
             // desktop service opened the filtered bus.
             bool session_bus_reason = m.notifications || m.tray || m.media_controls
-                || m.accessibility || m.keyring || m.screenshots || m.session_rules.length > 0;
+                || m.accessibility || m.keyring || m.online_accounts || m.screenshots
+                || m.session_rules.length > 0;
             var ownership = new Gee.ArrayList<string>();
             if (session_bus_reason) {
                 foreach (var name in SandboxIdentity.own_names_for(record)) ownership.add(name);
@@ -239,6 +242,7 @@ namespace AppManager.Core {
                 kf.set_boolean(GROUP_PERMISSIONS, "location", location);
                 kf.set_boolean(GROUP_PERMISSIONS, "network-info", network_info);
                 kf.set_boolean(GROUP_PERMISSIONS, "keyring", keyring);
+                kf.set_boolean(GROUP_PERMISSIONS, "online-accounts", online_accounts);
                 kf.set_boolean(GROUP_PERMISSIONS, "polkit", polkit);
                 kf.set_boolean(GROUP_PERMISSIONS, "screenshots", screenshots);
                 kf.set_boolean(GROUP_PERMISSIONS, "full-session-bus", full_session_bus);
@@ -316,6 +320,7 @@ namespace AppManager.Core {
             m.location = read_bool(kf, GROUP_PERMISSIONS, "location", false);
             m.network_info = read_bool(kf, GROUP_PERMISSIONS, "network-info", false);
             m.keyring = read_bool(kf, GROUP_PERMISSIONS, "keyring", false);
+            m.online_accounts = read_bool(kf, GROUP_PERMISSIONS, "online-accounts", false);
             m.polkit = read_bool(kf, GROUP_PERMISSIONS, "polkit", false);
             m.screenshots = read_bool(kf, GROUP_PERMISSIONS, "screenshots", false);
             m.full_session_bus = read_bool(kf, GROUP_PERMISSIONS, "full-session-bus", false);
@@ -402,7 +407,7 @@ namespace AppManager.Core {
         }
 
         public bool needs_session_bus() {
-            return !full_session_bus && (notifications || tray || media_controls || (version >= 3 && accessibility) || keyring || screenshots || own_names.length > 0 || session_rules.length > 0);
+            return !full_session_bus && (notifications || tray || media_controls || (version >= 3 && accessibility) || keyring || online_accounts || screenshots || own_names.length > 0 || session_rules.length > 0);
         }
 
         /**

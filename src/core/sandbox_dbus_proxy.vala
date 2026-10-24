@@ -282,6 +282,10 @@ namespace AppManager.Core {
             if (manifest.keyring) {
                 foreach (var name in KEYRING_NAMES) rules.add("--talk=" + name);
             }
+            if (manifest.online_accounts) {
+                foreach (var name in ONLINE_ACCOUNTS_NAMES) rules.add("--talk=" + name);
+                rules.add("--talk=%s.*".printf(EVOLUTION_DATASERVER_NAMESPACE));
+            }
             if (manifest.screenshots) {
                 rules.add_all(screenshot_rules());
             }
@@ -328,6 +332,20 @@ namespace AppManager.Core {
             "org.kde.kwalletd5",
             "org.kde.kwalletd6"
         };
+
+        // GNOME Online Accounts plus the services Convey (and other GOA-backed mail
+        // and calendar apps) use: Contacts for contact cards, Settings to open the
+        // Online Accounts panel, and the keyring prompter for passphrase prompts.
+        // Evolution Data Server is a namespace because its versioned service names
+        // change between releases. Whole services: the proxy cannot filter on call
+        // arguments, and GOA returns credentials for every configured account.
+        public const string[] ONLINE_ACCOUNTS_NAMES = {
+            "org.gnome.OnlineAccounts",
+            "org.gnome.Contacts",
+            "org.gnome.Settings",
+            "org.gnome.keyring.SystemPrompter"
+        };
+        public const string EVOLUTION_DATASERVER_NAMESPACE = "org.gnome.evolution.dataserver";
 
         // How far to enumerate tray-item names from the app's own pid. A few pids
         // cover an Electron app whose tray lives in a forked helper, and a couple of

@@ -98,7 +98,7 @@ namespace AppManager.Core {
                 // Old downloaded snapshots carried this retired setting.
                 if (p.has_member("appearance")) choice(p, "appearance", { "shared", "private" });
                 var services = new HashSet<string>();
-                string[] known = { "notifications", "media-controls", "system-tray", "accessibility", "network-information", "location", "bluetooth" };
+                string[] known = { "notifications", "media-controls", "system-tray", "accessibility", "network-information", "location", "bluetooth", "online-accounts" };
                 if (!p.has_member("desktopServices")) fail("missing desktopServices");
                 if (p.get_member("desktopServices").get_node_type() == Json.NodeType.OBJECT) {
                     var settings = object_value(p, "desktopServices");
@@ -237,6 +237,7 @@ namespace AppManager.Core {
                 record.sandbox_allow_network_info = desktop_service("network-information", false);
                 record.sandbox_allow_location = desktop_service("location", false);
                 record.sandbox_allow_bluetooth = desktop_service("bluetooth", false);
+                record.sandbox_allow_online_accounts = desktop_service("online-accounts", false);
                 var ownership = policy.get_object_member("ownership");
                 var names = new ArrayList<string>();
                 if (ownership.has_member("mediaPlayers")) {

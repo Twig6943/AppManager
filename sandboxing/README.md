@@ -96,6 +96,10 @@ installs** are supported; extracted apps cannot currently be sandboxed.
   and settings again. Your old real-home configuration stays intact, and turning
   sandboxing off uses it again. Existing portable `.home`/`.config` data is moved
   into the sandbox when enabled and is not moved back when disabled.
+- **Online accounts and mail.** Mail and calendar apps that use GNOME Online
+  Accounts need the **Online accounts** service. It also reaches Evolution Data
+  Server, Contacts, Settings and passphrase prompts, so the app can access every
+  configured account and its mail, calendar and contact data.
 - **File access and links.** File dialogs show only visible folders. Dragging a
   file from outside may give the app a path it cannot open; grant its folder
   first. Browser links and "open containing folder" are not supported through
@@ -123,10 +127,10 @@ installs** are supported; extracted apps cannot currently be sandboxed.
   Press Ctrl+H in the folder picker to show hidden folders. This lets the app
   install a helper that your browser runs outside the sandbox. Apps that keep
   their connection socket elsewhere may still fail.
-- **Some apps need compatibility adjustments.** Detected Chromium/Electron apps
-  run with their internal sandbox disabled because it conflicts with this one;
-  AppManager's outer sandbox remains active. Custom themes importing files from
-  other folders may need an extra folder grant. Some apps can still fail with
-  restricted permissions.
+- **Some apps need compatibility adjustments.** Detected Chromium/Electron and
+  WebKitGTK apps run with their internal sandbox disabled because it conflicts
+  with this one; AppManager's outer sandbox remains active. Custom themes
+  importing files from other folders may need an extra folder grant. Some apps
+  can still fail with restricted permissions.
 
 [Back to AppManager](../README.md)

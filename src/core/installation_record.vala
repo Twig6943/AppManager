@@ -153,6 +153,10 @@ namespace AppManager.Core {
         // Secret Service and KWallet. Off by default: neither separates apps, so this
         // exposes every stored password, not just the app's own.
         public bool sandbox_allow_keyring { get; set; default = false; }
+        // GNOME Online Accounts plus the services a GOA-backed mail or calendar app
+        // needs: Evolution Data Server, Contacts, Settings and the keyring prompter.
+        // Off by default: it exposes every configured account and its personal data.
+        public bool sandbox_allow_online_accounts { get; set; default = false; }
         // Polkit, for "unlock with system authentication". Off by default: polkit
         // identifies the caller by host pid, so this also shares host processes.
         public bool sandbox_allow_polkit { get; set; default = false; }
@@ -227,6 +231,7 @@ namespace AppManager.Core {
             sandbox_allow_location      = other.sandbox_allow_location;
             sandbox_allow_network_info  = other.sandbox_allow_network_info;
             sandbox_allow_keyring       = other.sandbox_allow_keyring;
+            sandbox_allow_online_accounts = other.sandbox_allow_online_accounts;
             sandbox_allow_polkit        = other.sandbox_allow_polkit;
             sandbox_allow_screenshots   = other.sandbox_allow_screenshots;
             sandbox_allow_downloads     = other.sandbox_allow_downloads;
@@ -582,6 +587,7 @@ namespace AppManager.Core {
             put_bool(builder, "sandbox_allow_location", sandbox_allow_location);
             put_bool(builder, "sandbox_allow_network_info", sandbox_allow_network_info);
             put_bool(builder, "sandbox_allow_keyring", sandbox_allow_keyring);
+            put_bool(builder, "sandbox_allow_online_accounts", sandbox_allow_online_accounts);
             put_bool(builder, "sandbox_allow_polkit", sandbox_allow_polkit);
             put_bool(builder, "sandbox_allow_screenshots", sandbox_allow_screenshots);
             put_bool(builder, "sandbox_share_processes", sandbox_share_processes);
@@ -663,6 +669,7 @@ namespace AppManager.Core {
             sandbox_allow_location   = read_bool(obj, "sandbox_allow_location", sandbox_allow_location);
             sandbox_allow_network_info = read_bool(obj, "sandbox_allow_network_info", false);
             sandbox_allow_keyring = read_bool(obj, "sandbox_allow_keyring", false);
+            sandbox_allow_online_accounts = read_bool(obj, "sandbox_allow_online_accounts", false);
             sandbox_allow_polkit = read_bool(obj, "sandbox_allow_polkit", false);
             sandbox_allow_screenshots = read_bool(obj, "sandbox_allow_screenshots", false);
             sandbox_share_processes = read_bool(obj, "sandbox_share_processes", false);
